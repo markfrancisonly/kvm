@@ -1,8 +1,13 @@
 package kvm
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"time"
+
+	"github.com/jetkvm/kvm/internal/hidrpc"
+	"github.com/jetkvm/kvm/internal/keyboard"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -24,6 +29,26 @@ func (m *MQTTManager) subscribeCommands() {
 
 	for topic, handler := range commands {
 		if token := m.client.Subscribe(topic, 1, handler); token.Wait() && token.Error() != nil {
+			mqttLogger.Error().Err(token.Error()).Str("topic", topic).Msg("failed to subscribe")
+		}
+	}
+
+	// Keyboard input commands are subscribed at QoS 0, unlike the commands
+	// above: with the persistent session (CleanSession false), a QoS 1
+	// subscription makes the broker queue commands published while the device
+	// is offline and replay them on reconnect, and keystrokes must never be
+	// replayed into the attached host. Brokers that do not queue QoS 0 for
+	// offline persistent sessions (the common default) avoid that entirely;
+	// brokers that do queue QoS 0 are a residual risk noted in the PR.
+	// Retained messages are dropped in the handlers.
+	keyboardCommands := map[string]mqtt.MessageHandler{
+		m.topic("keyboard_macro", "set"): m.handleKeyboardMacroCommand,
+		m.topic("keyboard_text", "set"):  m.handleKeyboardTextCommand,
+		m.topic("keyboard_keys", "set"):  m.handleKeyboardKeysCommand,
+	}
+
+	for topic, handler := range keyboardCommands {
+		if token := m.client.Subscribe(topic, 0, handler); token.Wait() && token.Error() != nil {
 			mqttLogger.Error().Err(token.Error()).Str("topic", topic).Msg("failed to subscribe")
 		}
 	}
@@ -222,4 +247,152 @@ func (m *MQTTManager) handleVirtualMediaCommand(client mqtt.Client, msg mqtt.Mes
 
 	// Publish updated state immediately
 	m.publishVirtualMediaState()
+}
+
+const (
+	// maxKeyboardTextLength bounds how much text a single keyboard text
+	// command may type (each character takes ~40ms, so this is already ~40s
+	// of typing).
+	maxKeyboardTextLength = 1024
+	// maxKeyboardKeysLength bounds a hotkey combo payload; a combo is a
+	// handful of tokens, so anything larger is malformed.
+	maxKeyboardKeysLength = 256
+)
+
+// findKeyboardMacro locates a stored keyboard macro by ID, or by name
+// (case-insensitive) if no ID matches.
+func findKeyboardMacro(nameOrID string) (*KeyboardMacro, bool) {
+	for i := range config.KeyboardMacros {
+		if config.KeyboardMacros[i].ID == nameOrID {
+			return &config.KeyboardMacros[i], true
+		}
+	}
+	for i := range config.KeyboardMacros {
+		if strings.EqualFold(config.KeyboardMacros[i].Name, nameOrID) {
+			return &config.KeyboardMacros[i], true
+		}
+	}
+	return nil, false
+}
+
+// macroHIDSteps converts a stored macro's steps into wire-level HID steps.
+func macroHIDSteps(steps []KeyboardMacroStep) ([]hidrpc.KeyboardMacroStep, error) {
+	macroSteps := make([]keyboard.MacroStep, len(steps))
+	for i, step := range steps {
+		macroSteps[i] = keyboard.MacroStep(step)
+	}
+	return keyboard.HIDSteps(macroSteps)
+}
+
+// executeKeyboardSteps runs converted macro steps on a new goroutine — the
+// steps sleep between reports, and paho delivers all messages on one ordered
+// goroutine, so executing inline would stall every other command handler.
+// rpcExecuteKeyboardMacro cancels any running macro and serializes execution,
+// so overlapping commands run one after another rather than interleaving.
+func executeKeyboardSteps(source string, steps []hidrpc.KeyboardMacroStep) {
+	go func() {
+		if err := rpcExecuteKeyboardMacro(steps); err != nil {
+			if errors.Is(err, context.Canceled) {
+				mqttLogger.Info().Str("source", source).Msg("keyboard input canceled")
+				return
+			}
+			mqttLogger.Error().Err(err).Str("source", source).Msg("failed to execute keyboard input")
+		}
+	}()
+}
+
+func (m *MQTTManager) handleKeyboardMacroCommand(client mqtt.Client, msg mqtt.Message) {
+	if !m.actionsAllowed() {
+		mqttLogger.Warn().Msg("keyboard macro command rejected: actions are disabled")
+		return
+	}
+	if msg.Retained() {
+		mqttLogger.Warn().Msg("ignoring retained keyboard macro command")
+		return
+	}
+	payload := strings.TrimSpace(string(msg.Payload()))
+	mqttLogger.Info().Str("payload", payload).Msg("received keyboard macro command")
+
+	macro, ok := findKeyboardMacro(payload)
+	if !ok {
+		mqttLogger.Warn().Str("payload", payload).Msg("unknown keyboard macro")
+		return
+	}
+
+	steps, err := macroHIDSteps(macro.Steps)
+	if err != nil {
+		mqttLogger.Error().Err(err).Str("macro", macro.Name).Msg("failed to convert keyboard macro")
+		return
+	}
+
+	executeKeyboardSteps("macro "+macro.Name, steps)
+}
+
+func (m *MQTTManager) handleKeyboardTextCommand(client mqtt.Client, msg mqtt.Message) {
+	if !m.actionsAllowed() {
+		mqttLogger.Warn().Msg("keyboard text command rejected: actions are disabled")
+		return
+	}
+	if msg.Retained() {
+		mqttLogger.Warn().Msg("ignoring retained keyboard text command")
+		return
+	}
+	// The payload is typed verbatim and never logged: it may contain credentials.
+	text := string(msg.Payload())
+	mqttLogger.Info().Int("length", len(text)).Msg("received keyboard text command")
+
+	if text == "" {
+		mqttLogger.Warn().Msg("empty keyboard text command")
+		return
+	}
+	if len(text) > maxKeyboardTextLength {
+		mqttLogger.Warn().Int("length", len(text)).Int("max", maxKeyboardTextLength).Msg("keyboard text command too long")
+		return
+	}
+
+	macroSteps, err := keyboard.StepsFromText(text, config.KeyboardLayout)
+	if err != nil {
+		mqttLogger.Warn().Err(err).Msg("failed to convert keyboard text")
+		return
+	}
+
+	steps, err := keyboard.HIDSteps(macroSteps)
+	if err != nil {
+		mqttLogger.Error().Err(err).Msg("failed to encode keyboard text")
+		return
+	}
+
+	executeKeyboardSteps("text", steps)
+}
+
+func (m *MQTTManager) handleKeyboardKeysCommand(client mqtt.Client, msg mqtt.Message) {
+	if !m.actionsAllowed() {
+		mqttLogger.Warn().Msg("keyboard keys command rejected: actions are disabled")
+		return
+	}
+	if msg.Retained() {
+		mqttLogger.Warn().Msg("ignoring retained keyboard keys command")
+		return
+	}
+	payload := strings.TrimSpace(string(msg.Payload()))
+	mqttLogger.Info().Str("payload", payload).Msg("received keyboard keys command")
+
+	if len(payload) > maxKeyboardKeysLength {
+		mqttLogger.Warn().Int("length", len(payload)).Int("max", maxKeyboardKeysLength).Msg("keyboard keys command too long")
+		return
+	}
+
+	combo, err := keyboard.ParseCombo(payload)
+	if err != nil {
+		mqttLogger.Warn().Err(err).Msg("invalid key combo")
+		return
+	}
+
+	steps, err := keyboard.HIDSteps([]keyboard.MacroStep{combo})
+	if err != nil {
+		mqttLogger.Error().Err(err).Str("payload", payload).Msg("failed to convert key combo")
+		return
+	}
+
+	executeKeyboardSteps("keys "+payload, steps)
 }
