@@ -667,11 +667,16 @@ func (m *MQTTManager) publishKeyboardDiscovery(device *haDevice, availTopic, ava
 			Name:              "Send Text",
 			UniqueID:          fmt.Sprintf("jetkvm_%s_keyboard_text", m.deviceID),
 			CommandTopic:      m.topic("keyboard_text", "set"),
+			StateTopic:        m.topic("keyboard_text", "state"),
 			Icon:              "mdi:keyboard-outline",
 			AvailabilityTopic: availTopic,
 			AvailTemplate:     availTemplate,
 			Device:            device,
 		})
+		// Seed the field as empty so Home Assistant shows a blank box instead
+		// of "unknown", and so every submit is a change — otherwise sending the
+		// same text twice is a no-op. The typed text is never echoed back.
+		m.publishString(m.topic("keyboard_text", "state"), "", true)
 	} else {
 		m.removeDiscovery("text", "keyboard_text")
 	}
@@ -769,6 +774,7 @@ func (m *MQTTManager) cleanupAllTopics() {
 		m.topic("update", "state"),
 		m.topic("atx", "state"),
 		m.topic("dc", "state"),
+		m.topic("keyboard_text", "state"),
 	}
 	for _, t := range stateTopics {
 		m.publishString(t, "", true)

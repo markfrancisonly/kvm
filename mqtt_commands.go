@@ -363,6 +363,11 @@ func (m *MQTTManager) handleKeyboardTextCommand(client mqtt.Client, msg mqtt.Mes
 	}
 
 	executeKeyboardSteps("text", steps)
+
+	// Reset the Home Assistant text field to empty so the same text can be sent
+	// again (HA only re-publishes on a value change). Never echo the payload —
+	// it may contain a password.
+	m.publishString(m.topic("keyboard_text", "state"), "", true)
 }
 
 func (m *MQTTManager) handleKeyboardKeysCommand(client mqtt.Client, msg mqtt.Message) {
