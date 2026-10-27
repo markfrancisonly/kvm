@@ -35,6 +35,8 @@ type Hello struct {
 
 // Status is reported to the UI as the hostAgentState event.
 type Status struct {
+	// Enabled is the device setting; while it is off no agent is accepted.
+	Enabled bool     `json:"enabled"`
 	Present bool     `json:"present"`
 	OS      string   `json:"os,omitempty"`
 	Agent   string   `json:"agent,omitempty"`
@@ -44,9 +46,13 @@ type Status struct {
 
 // Errors are short codes because the UI matches on them to pick a fallback.
 var (
-	ErrNoAgent      = errors.New("no_agent")
+	ErrDisabled = errors.New("disabled")
+	ErrNoAgent  = errors.New("no_agent")
+	// ErrPartial: a frame was sent but its outcome is unknown (no answer, or
+	// a later frame failed after earlier ones were delivered), so the caller
+	// must not send the text again.
+	ErrPartial      = errors.New("partial")
 	ErrElevated     = errors.New("elevated")
-	ErrTimeout      = errors.New("timeout")
 	ErrTextTooLarge = errors.New("too_large")
 	ErrConsoleBusy  = errors.New("console_busy")
 	ErrAttached     = errors.New("hostagent: already attached")
@@ -80,6 +86,7 @@ type Manager struct {
 	idleCheck  time.Duration
 
 	mu          sync.Mutex
+	enabled     bool
 	link        io.Writer
 	state       State
 	info        Hello
@@ -172,11 +179,37 @@ func (m *Manager) Status() Status {
 	return m.statusLocked()
 }
 
+// SetEnabled applies the device setting. Disabling drops a connected agent.
+// New managers start disabled.
+func (m *Manager) SetEnabled(enabled bool) {
+	m.mu.Lock()
+	if m.enabled == enabled {
+		m.mu.Unlock()
+		return
+	}
+	m.enabled = enabled
+	if !enabled && m.state == StateAgent {
+		m.activeBlob = nil
+		changed := m.setStateLocked(StateConsole)
+		m.mu.Unlock()
+		if changed != nil {
+			changed()
+		}
+		return
+	}
+	fn, status := m.onStatus, m.statusLocked()
+	m.mu.Unlock()
+	if fn != nil {
+		fn(status)
+	}
+}
+
 func (m *Manager) statusLocked() Status {
 	if m.state != StateAgent {
-		return Status{}
+		return Status{Enabled: m.enabled}
 	}
 	return Status{
+		Enabled: m.enabled,
 		Present: true,
 		OS:      m.info.OS,
 		Agent:   m.info.Agent,
@@ -297,10 +330,14 @@ func (m *Manager) RelayFromBrowser(b []byte) error {
 	}
 
 	m.mu.Lock()
-	if m.state != StateAgent {
+	if !m.enabled || m.state != StateAgent {
+		err := ErrNoAgent
+		if !m.enabled {
+			err = ErrDisabled
+		}
 		m.mu.Unlock()
-		m.nackBrowser(f.Seq, ErrNoAgent.Error())
-		return ErrNoAgent
+		m.nackBrowser(f.Seq, err.Error())
+		return err
 	}
 	switch f.Type {
 	case TypeBlobBegin:
@@ -348,6 +385,7 @@ func (m *Manager) SendText(ctx context.Context, text string, clipboard bool) err
 	}
 	m.textMu.Lock()
 	defer m.textMu.Unlock()
+	delivered := false
 	for len(text) > 0 {
 		chunk := text
 		if len(chunk) > maxTextChunk {
@@ -359,8 +397,13 @@ func (m *Manager) SendText(ctx context.Context, text string, clipboard bool) err
 		}
 		text = text[len(chunk):]
 		if err := m.request(ctx, Frame{Type: TypeText, Flags: flags, Payload: []byte(chunk)}); err != nil {
+			if delivered {
+				m.log.Warn().Err(err).Msg("text paste failed after part of it was delivered")
+				return ErrPartial
+			}
 			return err
 		}
+		delivered = true
 	}
 	return nil
 }
@@ -368,6 +411,10 @@ func (m *Manager) SendText(ctx context.Context, text string, clipboard bool) err
 // request sends a device-originated frame and waits for its ACK or NACK.
 func (m *Manager) request(ctx context.Context, f Frame) error {
 	m.mu.Lock()
+	if !m.enabled {
+		m.mu.Unlock()
+		return ErrDisabled
+	}
 	if m.state != StateAgent {
 		m.mu.Unlock()
 		return ErrNoAgent
@@ -388,6 +435,8 @@ func (m *Manager) request(ctx context.Context, f Frame) error {
 	}
 	timer := time.NewTimer(m.AckTimeout)
 	defer timer.Stop()
+	// The frame is out. Only an explicit refusal by the agent means nothing
+	// was delivered; silence or a lost link leaves the outcome unknown.
 	select {
 	case r := <-ch:
 		if r.ok {
@@ -397,15 +446,15 @@ func (m *Manager) request(ctx context.Context, f Frame) error {
 		case ErrElevated.Error():
 			return ErrElevated
 		case "detached":
-			return ErrNoAgent
+			return ErrPartial
 		}
 		return fmt.Errorf("host agent refused: %s", r.note)
 	case <-ctx.Done():
 		drop()
-		return ctx.Err()
+		return ErrPartial
 	case <-timer.C:
 		drop()
-		return ErrTimeout
+		return ErrPartial
 	}
 }
 
@@ -540,6 +589,16 @@ func (m *Manager) handleFrame(f Frame) {
 }
 
 func (m *Manager) handleHello(f Frame) {
+	m.mu.Lock()
+	enabled := m.enabled
+	m.mu.Unlock()
+	if !enabled {
+		m.log.Debug().Msg("a host agent announced itself while the setting is off")
+		if err := m.send(Frame{Type: TypeNack, Payload: AckPayload(f.Seq, ErrDisabled.Error())}); err != nil {
+			m.log.Warn().Err(err).Msg("failed to refuse the announcement")
+		}
+		return
+	}
 	var hello Hello
 	if err := json.Unmarshal(f.Payload, &hello); err != nil || hello.Version != Version {
 		m.log.Warn().Err(err).Int("version", hello.Version).Msg("rejecting the host agent announcement")

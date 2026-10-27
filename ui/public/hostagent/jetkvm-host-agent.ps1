@@ -531,8 +531,14 @@ function Run-Session {
           $info = [Text.Encoding]::UTF8.GetString($f.Payload, 4, $f.Payload.Length - 4)
           Log "Connected to the JetKVM: $info"
         } elseif ($f.Type -eq $script:T.Nack) {
-          Log "The JetKVM refused the announcement; is its firmware up to date?"
-          Start-Sleep -Seconds 10
+          $reason = if ($f.Payload.Length -gt 4) { [Text.Encoding]::UTF8.GetString($f.Payload, 4, $f.Payload.Length - 4) } else { "" }
+          if ($reason -eq "disabled") {
+            Log "The JetKVM has the host agent turned off (Settings > Keyboard > Host agent); retrying in 30 s"
+            Start-Sleep -Seconds 30
+          } else {
+            Log "The JetKVM refused the announcement ($reason); is its firmware up to date?"
+            Start-Sleep -Seconds 10
+          }
         }
         continue
       }

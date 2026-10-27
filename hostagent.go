@@ -33,6 +33,7 @@ func initHostAgent() {
 			writeJSONRPCEvent("hostAgentState", s, currentSession)
 		}
 	})
+	hostAgent.SetEnabled(config.HostAgentEnabled)
 	hostAgentApplyConfig()
 	go hostAgentSupervisor()
 }
@@ -103,15 +104,29 @@ func rpcGetHostAgentState() (hostagent.Status, error) {
 	return hostAgent.Status(), nil
 }
 
-// rpcPasteText hands text to the host agent. The error data is a short code
-// (no_agent, elevated, timeout, too_large) so the UI can fall back to
-// keystrokes.
+// rpcSetHostAgentEnabled is the device setting that allows a host agent on
+// the USB serial port at all. Off by default.
+func rpcSetHostAgentEnabled(enabled bool) (bool, error) {
+	config.HostAgentEnabled = enabled
+	if err := SaveConfig(); err != nil {
+		return config.HostAgentEnabled, fmt.Errorf("failed to save config: %w", err)
+	}
+	hostAgent.SetEnabled(enabled)
+	return enabled, nil
+}
+
+// rpcPasteText hands text to the host agent. By default the agent puts the
+// text on the target's clipboard and presses Ctrl+V, which is what a paste
+// means to the focused application; mode "type" sends Unicode key events
+// instead, for applications that do not accept a paste. The error data is a
+// short code (disabled, no_agent, elevated, timeout, too_large) so the UI can
+// fall back to keystrokes.
 func rpcPasteText(text string, mode string) error {
-	clipboard := false
+	clipboard := true
 	switch mode {
-	case "", "type":
-	case "clipboard":
-		clipboard = true
+	case "", "clipboard":
+	case "type":
+		clipboard = false
 	default:
 		return fmt.Errorf("invalid mode: %s", mode)
 	}

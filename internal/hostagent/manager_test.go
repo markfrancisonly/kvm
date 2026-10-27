@@ -31,6 +31,7 @@ func newTestManager(t *testing.T) (*Manager, *fakeAgent, func()) {
 	devToAgentR, devToAgentW := io.Pipe()
 	log := zerolog.Nop()
 	m := New(&log, "0.0.0-test")
+	m.SetEnabled(true)
 	m.AckTimeout = 300 * time.Millisecond
 	m.IdleTimeout = 200 * time.Millisecond
 	m.idleCheck = 20 * time.Millisecond
@@ -188,8 +189,8 @@ func TestSendText(t *testing.T) {
 
 	go func() { done <- m.SendText(context.Background(), "slow", false) }()
 	a.expect(TypeText)
-	if err := <-done; err != ErrTimeout {
-		t.Fatalf("no ack: %v", err)
+	if err := <-done; err != ErrPartial {
+		t.Fatalf("no ack: %v, want partial (the frame was sent)", err)
 	}
 
 	if err := m.SendText(context.Background(), strings.Repeat("a", MaxText+1), false); err != ErrTextTooLarge {
@@ -220,6 +221,21 @@ func TestSendTextSplitsLongText(t *testing.T) {
 	}
 	if got.String() != text {
 		t.Fatal("reassembled text differs")
+	}
+}
+
+func TestSendTextReportsPartialDelivery(t *testing.T) {
+	m, a, cleanup := newTestManager(t)
+	defer cleanup()
+	a.hello()
+	done := make(chan error, 1)
+	go func() { done <- m.SendText(context.Background(), strings.Repeat("a", maxTextChunk+1), false) }()
+	first := a.expect(TypeText)
+	a.send(Frame{Type: TypeAck, Seq: 30, Payload: AckPayload(first.Seq, "")})
+	second := a.expect(TypeText)
+	a.send(Frame{Type: TypeNack, Seq: 31, Payload: AckPayload(second.Seq, "elevated")})
+	if err := <-done; err != ErrPartial {
+		t.Fatalf("second frame refused: got %v, want partial", err)
 	}
 }
 
@@ -348,6 +364,51 @@ func TestRelayFromBrowser(t *testing.T) {
 	if seq, _, _ := ParseAck(cancel.Payload); seq != 7 {
 		t.Fatalf("cancelled blob %d, want 7", seq)
 	}
+}
+
+func TestDisabledSettingRefusesAgents(t *testing.T) {
+	m, a, cleanup := newTestManager(t)
+	defer cleanup()
+	var mu sync.Mutex
+	var seen []Status
+	m.OnStatusChange(func(s Status) {
+		mu.Lock()
+		seen = append(seen, s)
+		mu.Unlock()
+	})
+
+	m.SetEnabled(false)
+	if s := m.Status(); s.Enabled || s.Present {
+		t.Fatalf("status after disabling: %+v", s)
+	}
+	a.send(Frame{Type: TypeHello, Seq: 1, Payload: []byte(`{"v":1,"os":"windows"}`)})
+	nack := a.expect(TypeNack)
+	if seq, note, _ := ParseAck(nack.Payload); seq != 1 || note != "disabled" {
+		t.Fatalf("nack %d %q", seq, note)
+	}
+	if err := m.SendText(context.Background(), "x", false); err != ErrDisabled {
+		t.Fatalf("send while disabled: %v", err)
+	}
+	if err := m.RelayFromBrowser(Frame{Type: TypeBlobCancel, Seq: 2, Payload: []byte{1, 0, 0, 0}}.Encode()); err != ErrDisabled {
+		t.Fatalf("relay while disabled: %v", err)
+	}
+
+	m.SetEnabled(true)
+	a.hello()
+	if s := m.Status(); !s.Enabled || !s.Present {
+		t.Fatalf("status after enabling and hello: %+v", s)
+	}
+
+	// Turning the setting off drops the connected agent.
+	m.SetEnabled(false)
+	if m.Status().Present {
+		t.Fatal("agent still present after disabling")
+	}
+	waitFor(t, "status callbacks", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) >= 4 && !seen[len(seen)-1].Present && !seen[len(seen)-1].Enabled
+	})
 }
 
 func TestAttachTwiceIsRefused(t *testing.T) {

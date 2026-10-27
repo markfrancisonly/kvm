@@ -1407,6 +1407,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getDeviceID":                {Func: rpcGetDeviceID},
 	"getDeviceCapabilities":      {Func: rpcGetDeviceCapabilities},
 	"getHostAgentState":          {Func: rpcGetHostAgentState},
+	"setHostAgentEnabled":        {Func: rpcSetHostAgentEnabled, Params: []string{"enabled"}},
 	"pasteText":                  {Func: rpcPasteText, Params: []string{"text"}, OptionalParams: []string{"mode"}},
 	"deregisterDevice":           {Func: rpcDeregisterDevice},
 	"getCloudState":              {Func: rpcGetCloudState},
