@@ -372,6 +372,16 @@ export default function WebRTCVideo({
     document.getElementById(targetTextInputId)?.focus({ preventScroll: true });
   }, []);
 
+  // A click or key on the video is a user gesture: use it to start audio when
+  // the autoplay policy blocked it, instead of asking for a second click.
+  const retryBlockedAudio = useCallback(() => {
+    if (!audioAutoplayBlocked) return;
+    audioElm.current
+      ?.play()
+      .then(() => setAudioAutoplayBlocked(false))
+      .catch(() => {});
+  }, [audioAutoplayBlocked]);
+
   // Take the focus once the video plays, unless an input already has it.
   useEffect(() => {
     if (!isPlaying) return;
@@ -382,6 +392,7 @@ export default function WebRTCVideo({
   const keyDownHandler = useCallback(
     (e: KeyboardEvent) => {
       if (isOcrMode) return; // Let OCR overlay handle keys
+      retryBlockedAudio();
       // The browser's paste event must fire (preventDefault would stop it)
       // and the V must not reach the target; pasteHandler does the rest.
       if (isClientPasteShortcut(e, settings.pasteOnCtrlV, settings.pasteOnCtrlShiftV)) {
@@ -469,6 +480,7 @@ export default function WebRTCVideo({
       isWindowsClient,
       settings.pasteOnCtrlV,
       settings.pasteOnCtrlShiftV,
+      retryBlockedAudio,
       queueTypedText,
     ],
   );
@@ -656,7 +668,11 @@ export default function WebRTCVideo({
       elm
         .play()
         .then(() => setAudioAutoplayBlocked(false))
-        .catch(() => setAudioAutoplayBlocked(true));
+        // Only the autoplay policy needs a click; a play() interrupted by the
+        // next stream change is not a permission problem.
+        .catch((error: unknown) =>
+          setAudioAutoplayBlocked((error as DOMException | undefined)?.name === "NotAllowedError"),
+        );
 
       return () => {
         elm.srcObject = null;
@@ -710,6 +726,7 @@ export default function WebRTCVideo({
         e => {
           e.preventDefault();
           focusTextInput();
+          retryBlockedAudio();
         },
         { signal },
       );
@@ -731,6 +748,7 @@ export default function WebRTCVideo({
       videoKeyUpHandler,
       dropHandler,
       focusTextInput,
+      retryBlockedAudio,
       updateVideoSizeStore,
     ],
   );
