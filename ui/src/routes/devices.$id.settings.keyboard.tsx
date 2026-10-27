@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 
-import { useSettingsStore } from "@hooks/stores";
+import { useCapability, useHostAgentStore, useSettingsStore } from "@hooks/stores";
 import { JsonRpcResponse, useJsonRpc } from "@hooks/useJsonRpc";
 import useKeyboardLayout from "@hooks/useKeyboardLayout";
 import { Checkbox } from "@components/Checkbox";
@@ -16,6 +16,10 @@ export default function SettingsKeyboardRoute() {
   const { pasteOnCtrlV, setPasteOnCtrlV, pasteOnCtrlShiftV, setPasteOnCtrlShiftV } =
     useSettingsStore();
   const { selectedKeyboard, keyboardOptions } = useKeyboardLayout();
+  const hostAgentCapable = useCapability("host_agent");
+  const hostAgent = useHostAgentStore(state => state.status);
+  // BASE_URL is "/static" on the device and "/" in the cloud, so join carefully.
+  const hostAgentScriptUrl = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/hostagent/jetkvm-host-agent.ps1`;
 
   const { send } = useJsonRpc();
 
@@ -29,6 +33,20 @@ export default function SettingsKeyboardRoute() {
       }
     });
   }, [send, setKeyboardLayout]);
+
+  // The device answers with a hostAgentState event, which updates the store.
+  const onHostAgentEnabledChange = useCallback(
+    (enabled: boolean) => {
+      send("setHostAgentEnabled", { enabled }, (resp: JsonRpcResponse) => {
+        if ("error" in resp) {
+          notifications.error(
+            m.host_agent_enable_error({ error: resp.error.data || m.unknown_error() }),
+          );
+        }
+      });
+    },
+    [send],
+  );
 
   const onKeyboardLayoutChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -98,6 +116,57 @@ export default function SettingsKeyboardRoute() {
           />
         </SettingsItem>
       </div>
+
+      {hostAgentCapable && (
+        <>
+          <div className="h-px w-full bg-slate-800/10 dark:bg-slate-300/20" />
+
+          <SettingsItem
+            title={m.host_agent_title()}
+            description={m.host_agent_section_description()}
+          />
+          <div className="ml-2 space-y-4 border-l border-slate-800/10 pl-4 dark:border-slate-300/20">
+            <SettingsItem
+              title={m.host_agent_enable_title()}
+              description={m.host_agent_enable_description()}
+            >
+              <Checkbox
+                checked={hostAgent.enabled ?? false}
+                onChange={e => onHostAgentEnabledChange(e.target.checked)}
+              />
+            </SettingsItem>
+            {hostAgent.enabled && (
+              <>
+                <SettingsItem
+                  title={m.host_agent_status_title()}
+                  description={
+                    hostAgent.present
+                      ? m.host_agent_connected({
+                          version: hostAgent.version ?? "",
+                          os: hostAgent.os ?? "",
+                        })
+                      : m.host_agent_absent()
+                  }
+                >
+                  <a
+                    href={hostAgentScriptUrl}
+                    download="jetkvm-host-agent.ps1"
+                    className="text-sm font-medium text-blue-700 hover:underline dark:text-blue-400"
+                  >
+                    {m.host_agent_download()}
+                  </a>
+                </SettingsItem>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  {m.host_agent_long_description()}
+                </p>
+                <pre className="rounded-sm bg-slate-100 p-2 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  powershell -ExecutionPolicy Bypass -File jetkvm-host-agent.ps1
+                </pre>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

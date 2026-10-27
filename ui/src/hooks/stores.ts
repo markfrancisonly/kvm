@@ -196,9 +196,16 @@ export interface RTCState {
 
   terminalChannel: RTCDataChannel | null;
   setTerminalChannel: (channel: RTCDataChannel | null) => void;
+
+  // Binary channel the device relays to the host agent (images and files).
+  hostAgentChannel: RTCDataChannel | null;
+  setHostAgentChannel: (channel: RTCDataChannel | null) => void;
 }
 
 export const useRTCStore = create<RTCState>(set => ({
+  hostAgentChannel: null,
+  setHostAgentChannel: channel => set({ hostAgentChannel: channel }),
+
   peerConnection: null,
   setPeerConnection: (pc: RTCState["peerConnection"]) => set({ peerConnection: pc }),
 
@@ -779,7 +786,8 @@ export type Capability =
   | "tls" // HTTPS listener with a selectable certificate
   | "local_loopback" // web UI can be limited to the loopback interface
   | "log_level" // default log level can be changed
-  | "tailscale"; // Tailscale client
+  | "tailscale" // Tailscale client
+  | "host_agent"; // pasteText and the hostagent channel for a host agent on the target
 
 export const useDeviceStore = create<DeviceState>(set => ({
   appVersion: null,
@@ -794,6 +802,28 @@ export const useDeviceStore = create<DeviceState>(set => ({
 // Whether the connected device reported a capability in getDeviceCapabilities.
 export const useCapability = (name: Capability) =>
   useDeviceStore(state => state.capabilities?.has(name) ?? false);
+
+// The hostAgentState event: a program on the target host that pastes what
+// the device sends it over the USB serial port.
+export interface HostAgentStatus {
+  // The device setting; off means no agent is accepted on the serial port.
+  enabled?: boolean;
+  present: boolean;
+  os?: string;
+  agent?: string;
+  version?: string;
+  caps?: string[];
+}
+
+export interface HostAgentState {
+  status: HostAgentStatus;
+  setStatus: (status: HostAgentStatus) => void;
+}
+
+export const useHostAgentStore = create<HostAgentState>(set => ({
+  status: { present: false },
+  setStatus: status => set({ status }),
+}));
 
 export interface TerminalState {
   terminator: string | null;

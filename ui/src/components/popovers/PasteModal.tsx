@@ -28,7 +28,7 @@ export default function PasteModal() {
   const { setDisableVideoFocusTrap } = useUiStore();
 
   const { send } = useJsonRpc();
-  const { pasteText, cancelPaste } = usePaste();
+  const { pasteText, cancelPaste, agentPresent } = usePaste();
 
   const [invalidChars, setInvalidChars] = useState<string[]>([]);
   const [delayValue, setDelayValue] = useState(defaultDelay);
@@ -159,7 +159,7 @@ export default function PasteModal() {
                       />
                     </div>
 
-                    {invalidChars.length > 0 && (
+                    {invalidChars.length > 0 && !agentPresent && (
                       <div className="mt-2 flex items-center gap-x-2">
                         <ExclamationCircleIcon className="h-4 w-4 text-red-500 dark:text-red-400" />
                         <span className="text-xs text-red-500 dark:text-red-400">
@@ -195,10 +195,12 @@ export default function PasteModal() {
                 </div>
                 <div className="space-y-4">
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    {m.paste_modal_sending_using_layout({
-                      iso: selectedKeyboard.isoCode,
-                      name: selectedKeyboard.name,
-                    })}
+                    {agentPresent
+                      ? m.paste_modal_via_host_agent()
+                      : m.paste_modal_sending_using_layout({
+                          iso: selectedKeyboard.isoCode,
+                          name: selectedKeyboard.name,
+                        })}
                   </p>
                 </div>
               </div>

@@ -67,7 +67,7 @@ export default function WebRTCVideo({
   // Store hooks
   const settings = useSettingsStore();
   const { handleKeyPress, resetKeyboardState } = useKeyboard();
-  const { pasteText } = usePaste();
+  const { pasteText, pasteFiles } = usePaste();
   const {
     getRelMouseMoveHandler,
     getAbsMouseMoveHandler,
@@ -532,6 +532,18 @@ export default function WebRTCVideo({
         return;
       const data = e.clipboardData;
       if (!data) return;
+      const files = Array.from(data.files);
+      if (files.length > 0) {
+        e.preventDefault();
+        void pasteFiles(files).catch((error: Error) =>
+          notifications.error(
+            error.message === "no_agent"
+              ? m.paste_files_need_host_agent()
+              : m.paste_files_failed({ error: error.message }),
+          ),
+        );
+        return;
+      }
       // Text pasted into the hidden text input is left to the browser: the
       // field's input event forwards it, and the text stays there for a
       // moment because a dictation tool may read it back to confirm the paste
@@ -547,7 +559,24 @@ export default function WebRTCVideo({
           );
       else notifications.error(m.paste_clipboard_empty());
     },
-    [isOcrMode, pasteText],
+    [isOcrMode, pasteFiles, pasteText],
+  );
+
+  // Files dropped on the video go to the host agent the same way.
+  const dropHandler = useCallback(
+    (e: DragEvent) => {
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void pasteFiles(files).catch((error: Error) =>
+        notifications.error(
+          error.message === "no_agent"
+            ? m.paste_files_need_host_agent()
+            : m.paste_files_failed({ error: error.message }),
+        ),
+      );
+    },
+    [pasteFiles],
   );
 
   const videoKeyUpHandler = useCallback((e: KeyboardEvent) => {
@@ -670,6 +699,10 @@ export default function WebRTCVideo({
       videoElmRefValue.addEventListener("keydown", videoKeyDownHandler, { signal });
       videoElmRefValue.addEventListener("keyup", videoKeyUpHandler, { signal });
 
+      // Files dropped on the video go to the host agent.
+      videoElmRefValue.addEventListener("dragover", e => e.preventDefault(), { signal });
+      videoElmRefValue.addEventListener("drop", dropHandler, { signal });
+
       // A click on the video must not move the focus away from the hidden
       // text input (the default mousedown action would), so it stays there.
       videoElmRefValue.addEventListener(
@@ -692,7 +725,14 @@ export default function WebRTCVideo({
         abortController.abort();
       };
     },
-    [onVideoPlaying, videoKeyDownHandler, videoKeyUpHandler, focusTextInput, updateVideoSizeStore],
+    [
+      onVideoPlaying,
+      videoKeyDownHandler,
+      videoKeyUpHandler,
+      dropHandler,
+      focusTextInput,
+      updateVideoSizeStore,
+    ],
   );
 
   // Setup Mouse Events

@@ -36,6 +36,8 @@ import {
   useSettingsStore,
   useCapability,
   useDeviceStore,
+  useHostAgentStore,
+  HostAgentStatus,
 } from "@hooks/stores";
 import {
   holdRpcEvents,
@@ -118,6 +120,7 @@ const loader: LoaderFunction = ({ params }: LoaderFunctionArgs) => {
 
 export default function KvmIdRoute() {
   const setCapabilities = useDeviceStore(state => state.setCapabilities);
+  const setHostAgentStatus = useHostAgentStore(state => state.setStatus);
   const setAppVersion = useDeviceStore(state => state.setAppVersion);
   const setSystemVersion = useDeviceStore(state => state.setSystemVersion);
   const loaderResp = useLoaderData();
@@ -486,6 +489,10 @@ export default function KvmIdRoute() {
     if (resp.method === "deviceCapabilities") {
       setCapabilities(resp.params as unknown as string[]);
     }
+
+    if (resp.method === "hostAgentState") {
+      setHostAgentStatus(resp.params as unknown as HostAgentStatus);
+    }
   }
 
   const focusTrapContainers = useMemo(
@@ -498,8 +505,11 @@ export default function KvmIdRoute() {
   useEffect(() => {
     // A new or closed channel may lead to different firmware: gated features
     // stay hidden until this channel's deviceCapabilities event arrives.
-    if (rpcDataChannel?.readyState !== "open") setCapabilities(null);
-  }, [rpcDataChannel?.readyState, setCapabilities]);
+    if (rpcDataChannel?.readyState !== "open") {
+      setCapabilities(null);
+      setHostAgentStatus({ present: false });
+    }
+  }, [rpcDataChannel?.readyState, setCapabilities, setHostAgentStatus]);
 
   // Mouse movement handler for E2E tests (needs send from useJsonRpc)
   const handleAbsMouseMove = useCallback(
@@ -619,6 +629,21 @@ export default function KvmIdRoute() {
     setCdcACMConsole(channel);
     return () => channel?.close();
   }, [peerConnection, usbSerial]);
+
+  // Host agent data channel: images and files for the agent on the target.
+  const hostAgentCapable = useCapability("host_agent");
+  const setHostAgentChannel = useRTCStore(state => state.setHostAgentChannel);
+  useEffect(() => {
+    if (!peerConnection || !hostAgentCapable) return;
+    const channel = peerConnection.createDataChannel("hostagent");
+    channel.binaryType = "arraybuffer";
+    channel.onopen = () => setHostAgentChannel(channel);
+    channel.onclose = () =>
+      useRTCStore.setState(state =>
+        state.hostAgentChannel === channel ? { hostAgentChannel: null } : {},
+      );
+    return () => channel.close();
+  }, [peerConnection, hostAgentCapable, setHostAgentChannel]);
 
   // KVM terminal data channel, published once open. The previous channel
   // stays in the store until the replacement opens, so the terminal does not
