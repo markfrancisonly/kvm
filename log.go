@@ -27,6 +27,7 @@ var (
 	serialLogger    = logging.GetSubsystemLogger("serial")
 	terminalLogger  = logging.GetSubsystemLogger("terminal")
 	cdcACMLogger    = logging.GetSubsystemLogger("cdcacm")
+	hostAgentLogger = logging.GetSubsystemLogger("hostagent")
 	displayLogger   = logging.GetSubsystemLogger("display")
 	audioLogger     = logging.GetSubsystemLogger("audio")
 	wolLogger       = logging.GetSubsystemLogger("wol")

@@ -576,6 +576,7 @@ func newSession(config SessionConfig) (*Session, error) {
 			// Wait for channel to be open before sending initial state
 			d.OnOpen(func() {
 				go reportLocalVersionAndCapabilities(session)
+				go reportHostAgentState(session)
 				triggerOTAStateUpdate(otaState.ToRPCState())
 				triggerVideoStateUpdate()
 				triggerUSBStateUpdate()
@@ -587,6 +588,8 @@ func newSession(config SessionConfig) (*Session, error) {
 			handleSerialChannel(d)
 		case "cdcacm":
 			handleCDCACMChannel(d)
+		case "hostagent":
+			handleHostAgentChannel(d)
 		default:
 			if strings.HasPrefix(d.Label(), uploadIdPrefix) {
 				go handleUploadChannel(d)

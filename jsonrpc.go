@@ -430,6 +430,7 @@ func rpcGetDeviceCapabilities() ([]string, error) {
 		"shell", "extensions", "usb_serial", "custom_edid", "upload_channel", "video_during_update",
 		"http_proxy", "domain", "mdns", "ipv6",
 		"tls", "local_loopback", "log_level", "tailscale",
+		"host_agent",
 	}, nil
 }
 
@@ -1054,6 +1055,7 @@ func updateUsbRelatedConfig() error {
 	if err := gadget.UpdateGadgetConfig(); err != nil {
 		return fmt.Errorf("failed to write gadget config: %w", err)
 	}
+	hostAgentApplyConfig()
 	// Reset recovery timer so auto-recovery doesn't interfere during
 	// the host's USB re-enumeration window after a deliberate config change.
 	setUSBRecoveryTimer(time.Now())
@@ -1404,6 +1406,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"reboot":                     {Func: rpcReboot, Params: []string{"force"}},
 	"getDeviceID":                {Func: rpcGetDeviceID},
 	"getDeviceCapabilities":      {Func: rpcGetDeviceCapabilities},
+	"getHostAgentState":          {Func: rpcGetHostAgentState},
+	"pasteText":                  {Func: rpcPasteText, Params: []string{"text"}, OptionalParams: []string{"mode"}},
 	"deregisterDevice":           {Func: rpcDeregisterDevice},
 	"getCloudState":              {Func: rpcGetCloudState},
 	"getNetworkState":            {Func: rpcGetNetworkState},

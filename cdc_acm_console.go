@@ -1,61 +1,46 @@
 package kvm
 
 import (
-	"io"
-	"os"
+	"sync/atomic"
 
 	"github.com/pion/webrtc/v4"
 )
 
-const cdcACMDevicePath = "/dev/ttyGS0"
+const (
+	cdcACMDevicePath       = "/dev/ttyGS0"
+	hostAgentConsoleNotice = "\r\n[JetKVM] The host agent is using this USB serial port; console input is paused until it exits.\r\n"
+)
 
+// handleCDCACMChannel serves the USB serial console over a data channel. The
+// tty itself is held open by the host agent supervisor (hostagent.go), which
+// passes console bytes through while no agent has announced itself.
 func handleCDCACMChannel(d *webrtc.DataChannel) {
 	scopedLogger := cdcACMLogger.With().
 		Uint16("data_channel_id", *d.ID()).Logger()
+	var sinkID atomic.Uint64
 
-	var f *os.File
 	d.OnOpen(func() {
-		var err error
-		f, err = os.OpenFile(cdcACMDevicePath, os.O_RDWR, 0)
-		if err != nil {
-			scopedLogger.Warn().Err(err).Str("path", cdcACMDevicePath).Msg("Failed to open CDC-ACM device")
-			d.Close()
-			return
-		}
-
-		go func() {
-			buf := make([]byte, 1024)
-			for {
-				n, err := f.Read(buf)
-				if err != nil {
-					if err != io.EOF {
-						scopedLogger.Warn().Err(err).Msg("Failed to read from CDC-ACM device")
-					}
-					break
-				}
-				if err := d.Send(buf[:n]); err != nil {
-					scopedLogger.Warn().Err(err).Msg("Failed to send CDC-ACM output")
-					break
-				}
+		sinkID.Store(hostAgent.SetConsoleSink(func(b []byte) {
+			if err := d.Send(b); err != nil {
+				scopedLogger.Warn().Err(err).Msg("Failed to send CDC-ACM output")
 			}
-		}()
-
+		}))
+		if hostAgent.Status().Present {
+			if err := d.Send([]byte(hostAgentConsoleNotice)); err != nil {
+				scopedLogger.Warn().Err(err).Msg("Failed to send the host agent notice")
+			}
+		}
 		scopedLogger.Info().Msg("CDC-ACM console channel opened")
 	})
 
 	d.OnMessage(func(msg webrtc.DataChannelMessage) {
-		if f == nil {
-			return
-		}
-		if _, err := f.Write(msg.Data); err != nil {
-			scopedLogger.Warn().Err(err).Msg("Failed to write to CDC-ACM device")
+		if err := hostAgent.WriteConsole(msg.Data); err != nil {
+			scopedLogger.Debug().Err(err).Msg("CDC-ACM console input dropped")
 		}
 	})
 
 	d.OnClose(func() {
-		if f != nil {
-			f.Close()
-		}
+		hostAgent.ClearConsoleSink(sinkID.Load())
 		scopedLogger.Info().Msg("CDC-ACM console channel closed")
 	})
 
