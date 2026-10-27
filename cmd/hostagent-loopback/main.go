@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,7 @@ func run(args []string) error {
 
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	m := hostagent.New(&log, "loopback")
+	m.SetEnabled(true)
 	m.OnStatusChange(func(s hostagent.Status) {
 		log.Info().Bool("present", s.Present).Str("os", s.OS).Str("agent", s.Agent).Msg("agent status")
 	})
@@ -127,7 +129,12 @@ func blobRoundTrip(m *hostagent.Manager, log zerolog.Logger) error {
 	})
 	defer m.ClearBrowserSink(id)
 
-	content := []byte(strings.Repeat("0123456789abcdef", 3000)) // 48000 bytes, three chunks
+	size := 48000 // three chunks
+	if v, err := strconv.Atoi(os.Getenv("LOOPBACK_BLOB_BYTES")); err == nil && v > 0 {
+		size = v
+	}
+	content := bytes.Repeat([]byte("0123456789abcdef"), size/16)
+	started := time.Now()
 	meta, _ := json.Marshal(map[string]any{"id": 1, "kind": "file", "name": "loopback.txt", "mime": "text/plain", "size": len(content), "paste": false})
 	var seq uint32 = 100
 	expectAck := func(want uint32) error {
@@ -167,7 +174,9 @@ func blobRoundTrip(m *hostagent.Manager, log zerolog.Logger) error {
 	if err := relay(hostagent.Frame{Type: hostagent.TypeBlobEnd, Payload: []byte{1, 0, 0, 0}}); err != nil {
 		return err
 	}
-	log.Info().Int("bytes", len(content)).Msg("blob acknowledged")
+	elapsed := time.Since(started)
+	log.Info().Int("bytes", len(content)).Dur("elapsed", elapsed).
+		Float64("kB_per_s", float64(len(content))/1024/elapsed.Seconds()).Msg("blob acknowledged")
 	return nil
 }
 
