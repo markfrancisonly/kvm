@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"strings"
 )
 
 // --- Home Assistant MQTT Discovery ---
@@ -412,6 +413,9 @@ func (m *MQTTManager) publishHADiscovery() {
 		m.removeDiscovery("button", "reboot")
 	}
 
+	// Keyboard macro buttons: one per stored macro when actions enabled
+	m.publishMacroDiscovery(device, availTopic, availTemplate, actionsEnabled)
+
 	// Firmware Update: always published, but command_topic only when actions enabled.
 	// NOTE: Do NOT use value_template/latest_version_template here — HA needs to parse
 	// the full JSON directly to recognize in_progress and update_percentage fields.
@@ -633,6 +637,58 @@ func (m *MQTTManager) publishDCDiscovery(device *haDevice, availTopic, availTemp
 	}
 }
 
+// macroObjectID keys a macro's Home Assistant button by the macro ID, so a
+// button keeps its entity identity (and the automations bound to it) when
+// other macros are added, renamed or deleted. Characters outside Home
+// Assistant's object_id alphabet become underscores.
+func macroObjectID(id string) string {
+	var b strings.Builder
+	b.WriteString("macro_")
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// publishMacroDiscovery publishes one Home Assistant button per stored keyboard
+// macro, or clears them while actions are disabled. Buttons of macros that no
+// longer exist are cleared by setKeyboardMacros, which knows the IDs that went
+// away.
+func (m *MQTTManager) publishMacroDiscovery(device *haDevice, availTopic, availTemplate string, actionsEnabled bool) {
+	for _, macro := range config.KeyboardMacros {
+		objectID := macroObjectID(macro.ID)
+		if !actionsEnabled {
+			m.removeDiscovery("button", objectID)
+			continue
+		}
+		m.publishDiscovery("button", objectID, haDiscoveryPayload{
+			Name:              "Macro: " + macro.Name,
+			UniqueID:          fmt.Sprintf("jetkvm_%s_%s", m.deviceID, objectID),
+			CommandTopic:      m.topic("keyboard_macro", "set"),
+			PayloadPress:      macro.ID,
+			Icon:              "mdi:keyboard-outline",
+			AvailabilityTopic: availTopic,
+			AvailTemplate:     availTemplate,
+			Device:            device,
+		})
+	}
+}
+
+// removeMacroDiscovery clears the buttons of deleted macros.
+func (m *MQTTManager) removeMacroDiscovery(ids []string) {
+	if !m.IsConnected() {
+		return
+	}
+	for _, id := range ids {
+		m.removeDiscovery("button", macroObjectID(id))
+	}
+}
+
 func (m *MQTTManager) publishDiscovery(component, objectID string, payload haDiscoveryPayload) {
 	payload.DefaultEntityID = fmt.Sprintf("%s.jetkvm_%s_%s", component, m.deviceID, objectID)
 	discoveryTopic := fmt.Sprintf("homeassistant/%s/jetkvm_%s/%s/config", component, m.deviceID, objectID)
@@ -691,6 +747,10 @@ func (m *MQTTManager) removeAllDiscovery() {
 	m.removeDiscovery("binary_sensor", "jiggler")
 	m.removeDiscovery("button", "reboot")
 	m.removeDiscovery("update", "firmware")
+	// Keyboard macro buttons
+	for _, macro := range config.KeyboardMacros {
+		m.removeDiscovery("button", macroObjectID(macro.ID))
+	}
 
 	// Extension-specific entities (both switch and binary_sensor variants)
 	m.removeATXDiscovery()
@@ -728,8 +788,9 @@ func (m *MQTTManager) cleanupAllTopics() {
 	mqttLogger.Info().Msg("cleaned up all MQTT topics and discovery entries")
 }
 
-// republishHADiscovery removes old extension entities and re-publishes all discovery configs.
-// Call this when the active extension changes.
+// republishHADiscovery re-publishes all discovery configs (removing entities
+// that no longer apply). Call this after a change that affects discovery, such
+// as the active extension changing or stored keyboard macros being edited.
 func (m *MQTTManager) republishHADiscovery() {
 	if !m.IsConnected() {
 		return
@@ -741,5 +802,5 @@ func (m *MQTTManager) republishHADiscovery() {
 	// Re-publish all discovery configs (publishHADiscovery handles removal of inactive extension entities)
 	m.publishHADiscovery()
 
-	mqttLogger.Info().Str("extension", config.ActiveExtension).Msg("republished HA discovery after extension change")
+	mqttLogger.Info().Str("extension", config.ActiveExtension).Msg("republished HA discovery")
 }
