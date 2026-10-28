@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -17,6 +19,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -611,13 +614,38 @@ func apiAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password)); err != nil {
+		if !apiPasswordOK(password) {
 			sendErrorJsonThenAbort(c, http.StatusUnauthorized, "Invalid password")
 			return
 		}
 
 		c.Next()
 	}
+}
+
+// A bcrypt check takes most of a second on the device, so a verified password
+// is remembered as a digest and reused until the stored hash changes.
+var apiAuthCache struct {
+	sync.Mutex
+	hash   string
+	digest [sha256.Size]byte
+}
+
+func apiPasswordOK(password string) bool {
+	digest := sha256.Sum256([]byte(password))
+	apiAuthCache.Lock()
+	hit := apiAuthCache.hash == config.HashedPassword && subtle.ConstantTimeCompare(digest[:], apiAuthCache.digest[:]) == 1
+	apiAuthCache.Unlock()
+	if hit {
+		return true
+	}
+	if bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password)) != nil {
+		return false
+	}
+	apiAuthCache.Lock()
+	apiAuthCache.hash, apiAuthCache.digest = config.HashedPassword, digest
+	apiAuthCache.Unlock()
+	return true
 }
 
 func getBindAddress(listenPort int) string {

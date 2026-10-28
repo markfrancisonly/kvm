@@ -18,6 +18,7 @@ func apiTestRouter(t *testing.T, mode, password string) *gin.Engine {
 		t.Fatal(err)
 	}
 	config = &Config{LocalAuthMode: mode, HashedPassword: string(hashed), LocalAuthToken: "cookie-token"}
+	apiAuthCache.hash = ""
 	r := gin.New()
 	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
 	return r
@@ -70,5 +71,19 @@ func TestAPIRPCRequests(t *testing.T) {
 	}
 	if w := apiPost(r, strings.Repeat("x", apiRPCMaxBody+1), nil); w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized body: status %d", w.Code)
+	}
+}
+
+func TestAPIPasswordCache(t *testing.T) {
+	apiTestRouter(t, "password", "secret")
+	if !apiPasswordOK("secret") || apiAuthCache.hash != config.HashedPassword {
+		t.Fatal("first check must verify and fill the cache")
+	}
+	if apiPasswordOK("wrong") {
+		t.Fatal("cache must not accept another password")
+	}
+	config.HashedPassword = "$2a$10$replaced"
+	if apiPasswordOK("secret") {
+		t.Fatal("a changed stored hash must invalidate the cache")
 	}
 }
