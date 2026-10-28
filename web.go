@@ -220,6 +220,9 @@ func setupRouter() *gin.Engine {
 	r.GET("/screenshot.jpg", apiAuthMiddleware(), handleScreenshotJPEG)
 	r.GET("/screenshot.png", apiAuthMiddleware(), handleScreenshotPNG)
 
+	// JSON-RPC over HTTP for scripts and automation without a WebRTC session.
+	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
+
 	// Catch-all route for SPA
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method == "GET" && c.NegotiateFormat(gin.MIMEHTML) == gin.MIMEHTML {
