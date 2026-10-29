@@ -60,7 +60,18 @@ var (
 // another concurrent screenshot request still needs it running.
 // VideoStart is idempotent (a no-op if a session already has capture
 // running), so it's always safe to call here.
+// errVideoPaused is returned while a session has paused capture, as the
+// virtual media dialog does to leave the device's CPU to an upload.
+var errVideoPaused = errors.New("video is paused by an open session")
+
 func captureScreenshot() ([]byte, error) {
+	videoPauseMu.Lock()
+	paused := videoPausedBy != nil
+	videoPauseMu.Unlock()
+	if paused {
+		return nil, errVideoPaused
+	}
+
 	screenshotInFlightMu.Lock()
 	screenshotInFlight++
 	screenshotInFlightMu.Unlock()
@@ -136,6 +147,10 @@ func handleScreenshotPNG(c *gin.Context) {
 }
 
 func writeScreenshotError(c *gin.Context, err error) {
+	if errors.Is(err, errVideoPaused) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
 	if errors.Is(err, native.ErrVideoNotStreaming) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no video signal detected (timed out starting capture)"})
 		return
