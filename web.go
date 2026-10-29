@@ -608,10 +608,20 @@ func apiAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// Same per-IP lockout as the login form, so this endpoint is no faster
+		// way to guess the password.
+		ip := c.ClientIP()
+		if allowed, retryAfter := passwordRateLimiter.IsAllowed(ip); !allowed {
+			c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
+			sendErrorJsonThenAbort(c, http.StatusTooManyRequests, "Too many failed attempts. Please try again later.")
+			return
+		}
 		if err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password)); err != nil {
+			passwordRateLimiter.RecordFailure(ip)
 			sendErrorJsonThenAbort(c, http.StatusUnauthorized, "Invalid password")
 			return
 		}
+		passwordRateLimiter.RecordSuccess(ip)
 
 		c.Next()
 	}
