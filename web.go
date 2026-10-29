@@ -614,10 +614,20 @@ func apiAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// Same per-IP lockout as the login form, so the API is no faster
+		// way to guess the password.
+		ip := c.ClientIP()
+		if allowed, retryAfter := passwordRateLimiter.IsAllowed(ip); !allowed {
+			c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
+			sendErrorJsonThenAbort(c, http.StatusTooManyRequests, "Too many failed attempts. Please try again later.")
+			return
+		}
 		if !apiPasswordOK(password) {
+			passwordRateLimiter.RecordFailure(ip)
 			sendErrorJsonThenAbort(c, http.StatusUnauthorized, "Invalid password")
 			return
 		}
+		passwordRateLimiter.RecordSuccess(ip)
 
 		c.Next()
 	}
@@ -632,18 +642,22 @@ var apiAuthCache struct {
 }
 
 func apiPasswordOK(password string) bool {
+	// One read of the stored hash: the password is verified against it and
+	// cached under it, so a password change during the bcrypt check cannot
+	// leave the old password cached under the new hash.
+	hash := config.HashedPassword
 	digest := sha256.Sum256([]byte(password))
 	apiAuthCache.Lock()
-	hit := apiAuthCache.hash == config.HashedPassword && subtle.ConstantTimeCompare(digest[:], apiAuthCache.digest[:]) == 1
+	hit := apiAuthCache.hash == hash && subtle.ConstantTimeCompare(digest[:], apiAuthCache.digest[:]) == 1
 	apiAuthCache.Unlock()
 	if hit {
 		return true
 	}
-	if bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password)) != nil {
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return false
 	}
 	apiAuthCache.Lock()
-	apiAuthCache.hash, apiAuthCache.digest = config.HashedPassword, digest
+	apiAuthCache.hash, apiAuthCache.digest = hash, digest
 	apiAuthCache.Unlock()
 	return true
 }

@@ -1,3 +1,5 @@
+//go:build linux && arm
+
 package kvm
 
 import (
@@ -5,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -19,6 +22,7 @@ func apiTestRouter(t *testing.T, mode, password string) *gin.Engine {
 	}
 	config = &Config{LocalAuthMode: mode, HashedPassword: string(hashed), LocalAuthToken: "cookie-token"}
 	apiAuthCache.hash = ""
+	passwordRateLimiter = NewRateLimiter()
 	r := gin.New()
 	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
 	return r
@@ -85,5 +89,40 @@ func TestAPIPasswordCache(t *testing.T) {
 	config.HashedPassword = "$2a$10$replaced"
 	if apiPasswordOK("secret") {
 		t.Fatal("a changed stored hash must invalidate the cache")
+	}
+}
+
+func TestAPIRateLimit(t *testing.T) {
+	r := apiTestRouter(t, "password", "secret")
+	ping := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+	wrong := func(q *http.Request) { q.SetBasicAuth("api", "wrong") }
+	for i := 1; i <= 5; i++ {
+		if w := apiPost(r, ping, wrong); w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status %d, want 401", i, w.Code)
+		}
+	}
+	w := apiPost(r, ping, func(q *http.Request) { q.SetBasicAuth("api", "secret") })
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("after five failures: status %d, want 429 with Retry-After, even for the right password", w.Code)
+	}
+}
+
+func TestAPIPasswordChangeDuringCheck(t *testing.T) {
+	slow, _ := bcrypt.GenerateFromPassword([]byte("old"), 12)
+	fresh, _ := bcrypt.GenerateFromPassword([]byte("new"), bcrypt.MinCost)
+	config = &Config{LocalAuthMode: "password", HashedPassword: string(slow)}
+	apiAuthCache.hash = ""
+	done := make(chan bool, 1)
+	go func() { done <- apiPasswordOK("old") }()
+	time.Sleep(20 * time.Millisecond) // the bcrypt check above is still running
+	config.HashedPassword = string(fresh)
+	if !<-done {
+		t.Fatal("old password must verify against the hash it was checked with")
+	}
+	if apiPasswordOK("old") {
+		t.Fatal("old password accepted after the change")
+	}
+	if !apiPasswordOK("new") {
+		t.Fatal("new password rejected")
 	}
 }
