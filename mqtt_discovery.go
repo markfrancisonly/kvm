@@ -658,8 +658,16 @@ func macroObjectID(id string) string {
 // publishMacroDiscovery publishes one Home Assistant button per stored keyboard
 // macro, or clears them while actions are disabled. Buttons of macros that no
 // longer exist are cleared by setKeyboardMacros, which knows the IDs that went
-// away.
+// away; removals made while disconnected are sent here first.
 func (m *MQTTManager) publishMacroDiscovery(device *haDevice, availTopic, availTemplate string, actionsEnabled bool) {
+	m.pendingMacroRemovalsMu.Lock()
+	pending := m.pendingMacroRemovals
+	m.pendingMacroRemovals = nil
+	m.pendingMacroRemovalsMu.Unlock()
+	for _, id := range pending {
+		m.removeDiscovery("button", macroObjectID(id))
+	}
+
 	for _, macro := range config.KeyboardMacros {
 		objectID := macroObjectID(macro.ID)
 		if !actionsEnabled {
@@ -679,9 +687,13 @@ func (m *MQTTManager) publishMacroDiscovery(device *haDevice, availTopic, availT
 	}
 }
 
-// removeMacroDiscovery clears the buttons of deleted macros.
+// removeMacroDiscovery clears the buttons of deleted macros, or queues them
+// for the next discovery pass while the broker is unreachable.
 func (m *MQTTManager) removeMacroDiscovery(ids []string) {
 	if !m.IsConnected() {
+		m.pendingMacroRemovalsMu.Lock()
+		m.pendingMacroRemovals = append(m.pendingMacroRemovals, ids...)
+		m.pendingMacroRemovalsMu.Unlock()
 		return
 	}
 	for _, id := range ids {
