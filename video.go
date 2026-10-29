@@ -54,24 +54,17 @@ var (
 	screenshotInFlight   int
 )
 
+// errVideoPaused is returned while a session has paused capture, as the
+// virtual media dialog does to leave the device's CPU to an upload.
+var errVideoPaused = errors.New("video is paused by an open session")
+
 // captureScreenshot returns a JPEG snapshot, starting video capture on
 // demand if nothing is currently streaming (e.g. no browser session is
 // open) and stopping it again afterward, unless a real WebRTC session or
 // another concurrent screenshot request still needs it running.
 // VideoStart is idempotent (a no-op if a session already has capture
 // running), so it's always safe to call here.
-// errVideoPaused is returned while a session has paused capture, as the
-// virtual media dialog does to leave the device's CPU to an upload.
-var errVideoPaused = errors.New("video is paused by an open session")
-
 func captureScreenshot() ([]byte, error) {
-	videoPauseMu.Lock()
-	paused := videoPausedBy != nil
-	videoPauseMu.Unlock()
-	if paused {
-		return nil, errVideoPaused
-	}
-
 	screenshotInFlightMu.Lock()
 	screenshotInFlight++
 	screenshotInFlightMu.Unlock()
@@ -82,7 +75,15 @@ func captureScreenshot() ([]byte, error) {
 	}()
 
 	deadline := time.Now().Add(screenshotAutoStartTimeout)
+	// The pause check and the start share the pause lock, so a pause cannot
+	// land between them and be undone by the start.
+	videoPauseMu.Lock()
+	if videoPausedBy != nil {
+		videoPauseMu.Unlock()
+		return nil, errVideoPaused
+	}
 	_ = nativeInstance.VideoStart()
+	videoPauseMu.Unlock()
 	defer func() {
 		screenshotInFlightMu.Lock()
 		soleRequester := screenshotInFlight <= 1
