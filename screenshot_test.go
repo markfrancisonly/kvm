@@ -5,7 +5,9 @@ package kvm
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -13,25 +15,31 @@ import (
 	"github.com/jetkvm/kvm/internal/native"
 )
 
-// recordingVideoNative notes the capture calls and serves one frame.
+// recordingVideoNative notes the capture calls and serves frames.
 type recordingVideoNative struct {
 	native.EmptyNativeInterface
 	calls []string
 }
 
-func (n *recordingVideoNative) VideoStart() error                 { n.calls = append(n.calls, "start"); return nil }
-func (n *recordingVideoNative) VideoStop() error                  { n.calls = append(n.calls, "stop"); return nil }
-func (n *recordingVideoNative) VideoGetSnapshot() ([]byte, error) { return []byte("jpeg"), nil }
+func (n *recordingVideoNative) VideoStart() error { n.calls = append(n.calls, "start"); return nil }
+func (n *recordingVideoNative) VideoStop() error  { n.calls = append(n.calls, "stop"); return nil }
+func (n *recordingVideoNative) VideoGetSnapshot() ([]byte, error) {
+	n.calls = append(n.calls, "snapshot")
+	return []byte("jpeg"), nil
+}
 
-func TestScreenshotLeavesAPausedStreamPaused(t *testing.T) {
+func TestScreenshotLeavesAPausedStreamPausedAfterTheLease(t *testing.T) {
 	fake := &recordingVideoNative{}
 	original := nativeInstance
 	nativeInstance = fake
-	defer func() { nativeInstance = original }()
+	screenshotLeaseMu.Lock()
+	screenshotLeaseUntil = time.Time{}
+	screenshotLeaseMu.Unlock()
 	videoPauseMu.Lock()
 	videoPausedBy = &Session{}
 	videoPauseMu.Unlock()
 	defer func() {
+		nativeInstance = original
 		videoPauseMu.Lock()
 		videoPausedBy = nil
 		videoPauseMu.Unlock()
@@ -41,8 +49,29 @@ func TestScreenshotLeavesAPausedStreamPaused(t *testing.T) {
 	if err != nil || len(frame) == 0 {
 		t.Fatalf("frame=%d err=%v", len(frame), err)
 	}
-	if len(fake.calls) == 0 || fake.calls[len(fake.calls)-1] != "stop" {
-		t.Fatalf("capture must end stopped while a session holds the pause, calls=%v", fake.calls)
+	// A cold start skips the first frame, and capture is left running for
+	// the lease instead of being stopped at once.
+	if want := []string{"start", "snapshot", "snapshot"}; !reflect.DeepEqual(fake.calls, want) {
+		t.Fatalf("calls = %v, want %v", fake.calls, want)
+	}
+	// A second screenshot inside the lease takes a single, fresh frame.
+	if _, err := captureScreenshot(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.calls[len(fake.calls)-1]; got != "snapshot" || fake.calls[len(fake.calls)-2] != "start" {
+		t.Fatalf("calls = %v", fake.calls)
+	}
+
+	// Once the lease is over, capture stops because the pause is held.
+	screenshotLeaseMu.Lock()
+	screenshotLeaseUntil = time.Now().Add(-time.Second)
+	if screenshotLeaseTimer != nil {
+		screenshotLeaseTimer.Stop()
+	}
+	screenshotLeaseMu.Unlock()
+	releaseScreenshotLease()
+	if got := fake.calls[len(fake.calls)-1]; got != "stop" {
+		t.Fatalf("capture must stop after the lease while a session holds the pause, calls=%v", fake.calls)
 	}
 }
 
