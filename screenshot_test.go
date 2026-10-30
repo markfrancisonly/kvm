@@ -3,7 +3,6 @@
 package kvm
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,7 +13,21 @@ import (
 	"github.com/jetkvm/kvm/internal/native"
 )
 
-func TestScreenshotRespectsPausedVideo(t *testing.T) {
+// recordingVideoNative notes the capture calls and serves one frame.
+type recordingVideoNative struct {
+	native.EmptyNativeInterface
+	calls []string
+}
+
+func (n *recordingVideoNative) VideoStart() error                 { n.calls = append(n.calls, "start"); return nil }
+func (n *recordingVideoNative) VideoStop() error                  { n.calls = append(n.calls, "stop"); return nil }
+func (n *recordingVideoNative) VideoGetSnapshot() ([]byte, error) { return []byte("jpeg"), nil }
+
+func TestScreenshotLeavesAPausedStreamPaused(t *testing.T) {
+	fake := &recordingVideoNative{}
+	original := nativeInstance
+	nativeInstance = fake
+	defer func() { nativeInstance = original }()
 	videoPauseMu.Lock()
 	videoPausedBy = &Session{}
 	videoPauseMu.Unlock()
@@ -24,9 +37,12 @@ func TestScreenshotRespectsPausedVideo(t *testing.T) {
 		videoPauseMu.Unlock()
 	}()
 
-	// nativeInstance is not set here, so reaching the capture path would panic.
-	if _, err := captureScreenshot(); !errors.Is(err, errVideoPaused) {
-		t.Fatalf("err = %v, want errVideoPaused", err)
+	frame, err := captureScreenshot()
+	if err != nil || len(frame) == 0 {
+		t.Fatalf("frame=%d err=%v", len(frame), err)
+	}
+	if len(fake.calls) == 0 || fake.calls[len(fake.calls)-1] != "stop" {
+		t.Fatalf("capture must end stopped while a session holds the pause, calls=%v", fake.calls)
 	}
 }
 
