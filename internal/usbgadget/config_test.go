@@ -23,14 +23,29 @@ func TestBaseGadgetConfigItemsAlwaysEnabled(t *testing.T) {
 	}
 }
 
-func TestAudioFunctionHasAFriendlyName(t *testing.T) {
-	// The kernel drops the last character of a function_name written without
-	// a trailing newline, and its own default "Source/Sink" reads like a fault.
-	name := audioConfig.attrs["function_name"]
-	if name == "" || name[len(name)-1] != '\n' {
-		t.Fatalf("function_name must end in a newline, got %q", name)
+func TestAudioFunctionIsNamedAfterTheProduct(t *testing.T) {
+	audio := audioConfig
+	audio.attrs = gadgetAttributes{}
+	u := &UsbGadget{configMap: map[string]gadgetConfigItem{
+		"base":      {attrs: gadgetAttributes{}},
+		"base_info": {attrs: gadgetAttributes{}},
+		"audio":     audio,
+	}}
+	// The kernel drops the last character of a write without a trailing
+	// newline, and its name field holds 31 characters.
+	cases := map[string]string{
+		"Wireless MultiMedia Keyboard":         "Wireless MultiMedia Keyboard\n",
+		"A product name longer than the field": "A product name longer than the \n",
+		"":                                     "USB Audio\n",
 	}
-	if name == "Source/Sink\n" {
-		t.Fatal("function_name should override the kernel default")
+	for product, want := range cases {
+		u.customConfig = Config{Product: product}
+		u.loadGadgetConfig()
+		if got := u.configMap["audio"].attrs["function_name"]; got != want {
+			t.Fatalf("%q: function_name = %q, want %q", product, got, want)
+		}
+	}
+	if audioConfig.attrs["function_name"] != "JetKVM USB Emulation Device\n" {
+		t.Fatal("the stock configuration should carry the stock product name")
 	}
 }
