@@ -6,10 +6,14 @@ var audioConfig = gadgetConfigItem{
 	path:       []string{"functions", "uac1.usb0"},
 	configPath: []string{"uac1.usb0"},
 	attrs: gadgetAttributes{
-		"c_chmask": "3",
-		"c_srate":  "48000",
-		"c_ssize":  "2",
-		"p_chmask": "0",
+		// The name the host shows for the audio device; the kernel's own
+		// default is "Source/Sink". The kernel drops the last character of a
+		// write without a trailing newline.
+		"function_name": "JetKVM Audio\n",
+		"c_chmask":      "3",
+		"c_srate":       "48000",
+		"c_ssize":       "2",
+		"p_chmask":      "0",
 		// We capture PCM without applying the gadget's ALSA mixer controls.
 		// Do not advertise hardware volume/mute that we cannot implement;
 		// hosts can apply software volume instead. Disable both directions:
