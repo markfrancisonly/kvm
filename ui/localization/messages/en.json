@@ -167,7 +167,7 @@
     "atx_power_control_reset_button": "Reset",
     "atx_power_control_send_action_error": "Failed to send ATX power action {action}: {error}",
     "atx_power_control_short_power_button": "Short Press",
-    "audio_enable_description": "Stream HDMI audio from the host.",
+    "audio_enable_description": "Play sound from the remote computer.",
     "audio_enable_title": "Enable Audio",
     "audio_page_description": "Stream audio from the host to your browser",
     "audio_title": "Audio",
