@@ -54,16 +54,14 @@ var (
 	screenshotInFlight   int
 )
 
-// errVideoPaused is returned while a session has paused capture, as the
-// virtual media dialog does to leave the device's CPU to an upload.
-var errVideoPaused = errors.New("video is paused by an open session")
-
 // captureScreenshot returns a JPEG snapshot, starting video capture on
 // demand if nothing is currently streaming (e.g. no browser session is
 // open) and stopping it again afterward, unless a real WebRTC session or
 // another concurrent screenshot request still needs it running.
 // VideoStart is idempotent (a no-op if a session already has capture
-// running), so it's always safe to call here.
+// running), so it's always safe to call here. A session that paused the
+// stream, as a hidden tab or the virtual media dialog does, gets it back
+// paused once the frame is taken.
 func captureScreenshot() ([]byte, error) {
 	screenshotInFlightMu.Lock()
 	screenshotInFlight++
@@ -75,20 +73,18 @@ func captureScreenshot() ([]byte, error) {
 	}()
 
 	deadline := time.Now().Add(screenshotAutoStartTimeout)
-	// The pause check and the start share the pause lock, so a pause cannot
-	// land between them and be undone by the start.
+	// Started under the pause lock so it cannot interleave with a pause.
 	videoPauseMu.Lock()
-	if videoPausedBy != nil {
-		videoPauseMu.Unlock()
-		return nil, errVideoPaused
-	}
 	_ = nativeInstance.VideoStart()
 	videoPauseMu.Unlock()
 	defer func() {
 		screenshotInFlightMu.Lock()
 		soleRequester := screenshotInFlight <= 1
 		screenshotInFlightMu.Unlock()
-		if soleRequester && getActiveSessions() == 0 {
+		videoPauseMu.Lock()
+		paused := videoPausedBy != nil
+		videoPauseMu.Unlock()
+		if soleRequester && (paused || getActiveSessions() == 0) {
 			_ = nativeInstance.VideoStop()
 		}
 	}()
@@ -148,10 +144,6 @@ func handleScreenshotPNG(c *gin.Context) {
 }
 
 func writeScreenshotError(c *gin.Context, err error) {
-	if errors.Is(err, errVideoPaused) {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-		return
-	}
 	if errors.Is(err, native.ErrVideoNotStreaming) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no video signal detected (timed out starting capture)"})
 		return
