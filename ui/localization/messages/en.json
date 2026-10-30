@@ -167,7 +167,7 @@
     "atx_power_control_reset_button": "Reset",
     "atx_power_control_send_action_error": "Failed to send ATX power action {action}: {error}",
     "atx_power_control_short_power_button": "Short Press",
-    "audio_enable_description": "Stream the audio the host plays to this USB device.",
+    "audio_enable_description": "Play sound from the remote computer in your browser. On the remote computer, select JetKVM Audio as the output device.",
     "audio_enable_title": "Enable Audio",
     "audio_microphone_codec_unsupported": "This browser does not support the microphone codec.",
     "audio_microphone_description": "Your microphone is heard on the remote computer. On the remote computer, select JetKVM Audio as the input device. Requires Enable Audio, an HTTPS connection to JetKVM, and microphone permission in your browser. Applies to this browser tab, and turning it on reconnects the session.",
