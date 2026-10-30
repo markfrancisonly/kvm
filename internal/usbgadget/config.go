@@ -1,6 +1,7 @@
 package usbgadget
 
 import (
+	"cmp"
 	"fmt"
 	"os/exec"
 )
@@ -100,6 +101,17 @@ func (u *UsbGadget) loadGadgetConfig() {
 	u.configMap["base_info"].attrs["serialnumber"] = u.customConfig.SerialNumber
 	u.configMap["base_info"].attrs["manufacturer"] = u.customConfig.Manufacturer
 	u.configMap["base_info"].attrs["product"] = u.customConfig.Product
+	u.configMap["audio"].attrs["function_name"] = audioFunctionName(u.customConfig.Product) + "\n"
+}
+
+// audioFunctionName is the product name cut to the 31 characters the audio
+// function's name can hold.
+func audioFunctionName(product string) string {
+	name := cmp.Or(product, "USB Audio")
+	if len(name) > 31 {
+		name = name[:31]
+	}
+	return name
 }
 
 func (u *UsbGadget) SetGadgetConfig(config *Config) {
