@@ -22,3 +22,15 @@ func TestBaseGadgetConfigItemsAlwaysEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestAudioFunctionHasAFriendlyName(t *testing.T) {
+	// The kernel drops the last character of a function_name written without
+	// a trailing newline, and its own default "Source/Sink" reads like a fault.
+	name := audioConfig.attrs["function_name"]
+	if name == "" || name[len(name)-1] != '\n' {
+		t.Fatalf("function_name must end in a newline, got %q", name)
+	}
+	if name == "Source/Sink\n" {
+		t.Fatal("function_name should override the kernel default")
+	}
+}
