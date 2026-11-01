@@ -899,6 +899,7 @@ export default function WebRTCVideo({
                       ref={fullscreenContainerRef}
                       className="relative flex h-full w-full items-center justify-center"
                     >
+                      {/* The element keeps the picture's own shape, so the pointer is only tracked over the picture. */}
                       <video
                         ref={videoElm}
                         autoPlay
@@ -910,7 +911,7 @@ export default function WebRTCVideo({
                         disablePictureInPicture
                         controlsList="nofullscreen"
                         style={videoStyle}
-                        className={cx("h-full w-full object-contain transition-all duration-1000", {
+                        className={cx("max-h-full max-w-full transition-all duration-1000", {
                           "cursor-none": settings.isCursorHidden,
                           "pointer-events-none": isOcrMode,
                           "opacity-0!":
