@@ -218,8 +218,8 @@ func setupRouter() *gin.Engine {
 		protected.GET("/diagnostics", handleDiagnosticsDownload)
 	}
 
-	// Screenshot endpoints: for headless/API consumers (CI, HIL rigs), not the
-	// browser UI, so they use apiAuthMiddleware rather than cookie auth.
+	// Screenshot endpoints: for scripts and HIL rigs with the API credentials,
+	// and for a logged-in tab that loads the URL directly with its cookie.
 	r.GET("/screenshot.jpg", sessionOrAPIAuthMiddleware(), handleScreenshotJPEG)
 	r.GET("/screenshot.png", sessionOrAPIAuthMiddleware(), handleScreenshotPNG)
 
