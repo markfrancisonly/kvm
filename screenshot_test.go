@@ -112,7 +112,7 @@ func TestScreenshotAuthRateLimit(t *testing.T) {
 	config = &Config{LocalAuthMode: "password", HashedPassword: string(hashed)}
 	passwordRateLimiter = NewRateLimiter()
 	r := gin.New()
-	r.GET("/shot", apiAuthMiddleware(), func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/shot", apiAuthMiddleware(true), func(c *gin.Context) { c.Status(http.StatusOK) })
 	get := func(password string) int {
 		q := httptest.NewRequest(http.MethodGet, "/shot", nil)
 		q.SetBasicAuth("api", password)
