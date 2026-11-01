@@ -55,5 +55,11 @@ func handleAPIRPC(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, JSONRPCResponse{JSONRPC: "2.0", Result: result, ID: request.ID})
+	// A successful call always carries result, null for a method that returns
+	// nothing; the shared response type omits an empty one for the error case.
+	c.JSON(http.StatusOK, struct {
+		JSONRPC string `json:"jsonrpc"`
+		Result  any    `json:"result"`
+		ID      any    `json:"id"`
+	}{"2.0", result, request.ID})
 }

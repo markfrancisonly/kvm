@@ -5,7 +5,11 @@ import { ensureNoPasswordViaAPI } from "./helpers";
 // scripts without a WebRTC session. The device runs in noPassword mode here,
 // so no credentials are sent; api_test.go covers the auth paths.
 
-async function rpc(request: APIRequestContext, method: string, params: Record<string, unknown> = {}) {
+async function rpc(
+  request: APIRequestContext,
+  method: string,
+  params: Record<string, unknown> = {},
+) {
   const response = await request.post("/api/rpc", {
     data: { jsonrpc: "2.0", id: method, method, params },
   });
@@ -13,6 +17,8 @@ async function rpc(request: APIRequestContext, method: string, params: Record<st
   const body = await response.json();
   expect(body.error, `${method} error`).toBeUndefined();
   expect(body.id).toBe(method);
+  // A success always carries result, null when the method returns nothing.
+  expect(Object.hasOwn(body, "result"), `${method} result member`).toBe(true);
   return body.result;
 }
 
@@ -25,7 +31,9 @@ test("JSON-RPC methods answer over HTTP", async ({ request }) => {
 
   const before = await rpc(request, "getJigglerState");
   try {
-    await rpc(request, "setJigglerState", { enabled: !before });
+    expect(
+      await rpc(request, "setJigglerState", { enabled: !before }),
+    ).toBeNull();
     expect(await rpc(request, "getJigglerState")).toBe(!before);
   } finally {
     await rpc(request, "setJigglerState", { enabled: before });
@@ -35,5 +43,7 @@ test("JSON-RPC methods answer over HTTP", async ({ request }) => {
     data: { jsonrpc: "2.0", id: 1, method: "noSuchMethod" },
   });
   expect(unknown.status()).toBe(404);
-  expect((await unknown.json()).error.code).toBe(-32601);
+  const unknownBody = await unknown.json();
+  expect(unknownBody.error.code).toBe(-32601);
+  expect(Object.hasOwn(unknownBody, "result")).toBe(false);
 });
