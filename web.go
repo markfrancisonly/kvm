@@ -220,8 +220,8 @@ func setupRouter() *gin.Engine {
 
 	// Screenshot endpoints: for headless/API consumers (CI, HIL rigs), not the
 	// browser UI, so they use apiAuthMiddleware rather than cookie auth.
-	r.GET("/screenshot.jpg", apiAuthMiddleware(true), handleScreenshotJPEG)
-	r.GET("/screenshot.png", apiAuthMiddleware(true), handleScreenshotPNG)
+	r.GET("/screenshot.jpg", sessionOrAPIAuthMiddleware(), handleScreenshotJPEG)
+	r.GET("/screenshot.png", sessionOrAPIAuthMiddleware(), handleScreenshotPNG)
 
 	// JSON-RPC over HTTP for scripts and automation without a WebRTC session.
 	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)

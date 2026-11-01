@@ -112,7 +112,7 @@ func TestScreenshotAuthRateLimit(t *testing.T) {
 	config = &Config{LocalAuthMode: "password", HashedPassword: string(hashed)}
 	passwordRateLimiter = NewRateLimiter()
 	r := gin.New()
-	r.GET("/shot", apiAuthMiddleware(true), func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/shot", sessionOrAPIAuthMiddleware(), func(c *gin.Context) { c.Status(http.StatusOK) })
 	get := func(password string) int {
 		q := httptest.NewRequest(http.MethodGet, "/shot", nil)
 		q.SetBasicAuth("api", password)
@@ -127,5 +127,42 @@ func TestScreenshotAuthRateLimit(t *testing.T) {
 	}
 	if code := get("secret"); code != http.StatusTooManyRequests {
 		t.Fatalf("after five failures: %d, want 429", code)
+	}
+}
+
+// The real route table, not a test router: the screenshot URLs take the
+// session cookie, since a logged-in tab loads them directly, as well as the
+// API credentials, and refuse a request with neither.
+func TestScreenshotRouteAuth(t *testing.T) {
+	fake := &recordingVideoNative{}
+	original := nativeInstance
+	nativeInstance = fake
+	defer func() { nativeInstance = original }()
+	hashed, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = &Config{LocalAuthMode: "password", HashedPassword: string(hashed), LocalAuthToken: "cookie-token"}
+	apiAuthCache.hash = ""
+	passwordRateLimiter = NewRateLimiter()
+	r := setupRouter()
+	get := func(auth func(*http.Request)) *httptest.ResponseRecorder {
+		q := httptest.NewRequest(http.MethodGet, "/screenshot.jpg", nil)
+		if auth != nil {
+			auth(q)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, q)
+		return w
+	}
+	if w := get(nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("no credentials: %d, want 401", w.Code)
+	}
+	cookie := func(q *http.Request) { q.AddCookie(&http.Cookie{Name: "authToken", Value: "cookie-token"}) }
+	if w := get(cookie); w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("session cookie: %d %s, want 200 image/jpeg", w.Code, w.Header().Get("Content-Type"))
+	}
+	if w := get(func(q *http.Request) { q.SetBasicAuth("api", "secret") }); w.Code != http.StatusOK {
+		t.Fatalf("basic auth: %d, want 200", w.Code)
 	}
 }
