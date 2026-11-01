@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 
-import { useHostAgentStore, useRTCStore } from "@/hooks/stores";
+import { useHostAgentStore, useRTCStore, useSettingsStore } from "@/hooks/stores";
 import useKeyboard from "@/hooks/useKeyboard";
-import useKeyboardLayout from "@/hooks/useKeyboardLayout";
+import { keyboardForLayout } from "@/hooks/useKeyboardLayout";
+import { loadKeyboardLayout } from "@/keyboardLayoutLoader";
 import { textToMacroSteps } from "@/keyboardPaste";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import {
@@ -121,10 +122,18 @@ async function sendBlob(
 export default function usePaste() {
   const { send } = useJsonRpc();
   const { executeMacro, cancelExecuteMacro } = useKeyboard();
-  const { selectedKeyboard } = useKeyboardLayout();
+  const { setKeyboardLayout } = useSettingsStore();
   const agentPresent = useHostAgentStore(state => state.status.present);
   const rpcDataChannel = useRTCStore(state => state.rpcDataChannel);
   const hostAgentChannel = useRTCStore(state => state.hostAgentChannel);
+
+  // Only the keyboard settings and the paste modal fetched the device's
+  // layout, so a fresh browser typed its first dictation or shortcut paste
+  // with the "en-US" default. The layout is fetched once per connection and
+  // the first paste waits for it.
+  useEffect(() => {
+    void loadKeyboardLayout(rpcDataChannel, send, setKeyboardLayout);
+  }, [rpcDataChannel, send, setKeyboardLayout]);
 
   const pasteViaAgent = useCallback(
     (text: string) =>
@@ -159,11 +168,13 @@ export default function usePaste() {
           console.warn(`Host agent paste failed (${reason}), typing instead`);
         }
       }
-      const { steps, skipped } = textToMacroSteps(text, selectedKeyboard, options?.delay);
+      await loadKeyboardLayout(rpcDataChannel, send, setKeyboardLayout);
+      const keyboard = keyboardForLayout(useSettingsStore.getState().keyboardLayout);
+      const { steps, skipped } = textToMacroSteps(text, keyboard, options?.delay);
       if (steps.length > 0) await executeMacro(steps);
       return { via: "keystrokes", skipped };
     },
-    [agentPresent, pasteViaAgent, selectedKeyboard, executeMacro],
+    [agentPresent, pasteViaAgent, rpcDataChannel, send, setKeyboardLayout, executeMacro],
   );
 
   const pasteText = useCallback(
