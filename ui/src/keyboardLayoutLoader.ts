@@ -12,28 +12,28 @@ type RpcSend = (
 
 // One fetch per rpc channel, so a reconnect or another device fetches again.
 // A fetch without a usable answer drops its entry and the next caller retries.
-const loads = new WeakMap<RpcChannel, Promise<void>>();
+const loads = new WeakMap<RpcChannel, Promise<boolean>>();
 
-// Resolves once the device's keyboard layout is stored, or once it cannot be:
-// the channel closed, the request failed or the reply timed out. Nothing is
-// asked before the channel is open.
+// Resolves true once the device's keyboard layout is stored, false once it
+// cannot be: the channel closed, the request failed or the reply timed out.
+// Nothing is asked before the channel is open.
 export function loadKeyboardLayout(
   channel: RpcChannel | null,
   send: RpcSend,
   setKeyboardLayout: (layout: string) => void,
   timeoutMs = 3000,
-): Promise<void> {
+): Promise<boolean> {
   if (
     !channel ||
     channel.readyState === "closing" ||
     channel.readyState === "closed"
   )
-    return Promise.resolve();
+    return Promise.resolve(false);
   const pending = loads.get(channel);
   if (pending) return pending;
 
-  let resolve!: () => void;
-  const load = new Promise<void>((r) => (resolve = r));
+  let resolve!: (loaded: boolean) => void;
+  const load = new Promise<boolean>((r) => (resolve = r));
   loads.set(channel, load);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -42,7 +42,7 @@ export function loadKeyboardLayout(
     channel.removeEventListener("open", request);
     channel.removeEventListener("close", giveUp);
     if (!loaded && loads.get(channel) === load) loads.delete(channel);
-    resolve();
+    resolve(loaded);
   };
   const giveUp = () => finish(false);
   const request = () => {

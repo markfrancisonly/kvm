@@ -129,8 +129,9 @@ export default function usePaste() {
 
   // Only the keyboard settings and the paste modal fetched the device's
   // layout, so a fresh browser typed its first dictation or shortcut paste
-  // with the "en-US" default. The layout is fetched once per connection and
-  // the first paste waits for it.
+  // with the "en-US" default. The layout is fetched once per connection, the
+  // first paste waits for it, and nothing is typed with a layout the device
+  // did not confirm.
   useEffect(() => {
     void loadKeyboardLayout(rpcDataChannel, send, setKeyboardLayout);
   }, [rpcDataChannel, send, setKeyboardLayout]);
@@ -168,7 +169,8 @@ export default function usePaste() {
           console.warn(`Host agent paste failed (${reason}), typing instead`);
         }
       }
-      await loadKeyboardLayout(rpcDataChannel, send, setKeyboardLayout);
+      const loaded = await loadKeyboardLayout(rpcDataChannel, send, setKeyboardLayout);
+      if (!loaded) throw new Error("the device's keyboard layout could not be read");
       const keyboard = keyboardForLayout(useSettingsStore.getState().keyboardLayout);
       const { steps, skipped } = textToMacroSteps(text, keyboard, options?.delay);
       if (steps.length > 0) await executeMacro(steps);
