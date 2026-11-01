@@ -49,8 +49,8 @@ func TestEDIDPresets(t *testing.T) {
 }
 
 func TestEDIDPresetLookup(t *testing.T) {
-	p, ok := edidPresetByName("portrait, 1200X1920")
-	if !ok || p.Name != "Portrait, 1200x1920" {
+	p, ok := edidPresetByName("jetkvm PORTRAIT")
+	if !ok || p.Name != "JetKVM Portrait" {
 		t.Fatalf("lookup by name: %v %q", ok, p.Name)
 	}
 	if _, ok := edidPresetByName("no such preset"); ok {
