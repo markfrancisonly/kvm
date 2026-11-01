@@ -24,9 +24,9 @@ func apiTestRouter(t *testing.T, mode, password string) *gin.Engine {
 	apiAuthCache.hash = ""
 	passwordRateLimiter = NewRateLimiter()
 	r := gin.New()
-	r.POST("/api/rpc", apiAuthMiddleware(false), handleAPIRPC)
-	// Stands in for the routes that keep the cookie, like the screenshot URLs.
-	r.POST("/api/cookie-ok", apiAuthMiddleware(true), handleAPIRPC)
+	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
+	// Stands in for the routes a browser loads, like the screenshot URLs.
+	r.POST("/api/session-ok", sessionOrAPIAuthMiddleware(), handleAPIRPC)
 	return r
 }
 
@@ -58,19 +58,35 @@ func TestAPIRPCAuth(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"result":"pong"`) {
 		t.Fatalf("basic auth: status %d body %s", w.Code, w.Body.String())
 	}
-	// /api/rpc reaches every method, so the session cookie alone is refused
-	// there; a route registered with allowCookie still takes it.
+	// /api/rpc takes explicit credentials only; the session variant also
+	// takes the cookie.
 	cookie := func(q *http.Request) { q.AddCookie(&http.Cookie{Name: "authToken", Value: "cookie-token"}) }
 	if w := apiPost(r, ping, cookie); w.Code != http.StatusUnauthorized {
 		t.Fatalf("session cookie on /api/rpc: status %d, want 401", w.Code)
 	}
-	if w := apiPostTo(r, "/api/cookie-ok", ping, cookie); w.Code != http.StatusOK {
-		t.Fatalf("session cookie with allowCookie: status %d body %s", w.Code, w.Body.String())
+	if w := apiPostTo(r, "/api/session-ok", ping, cookie); w.Code != http.StatusOK {
+		t.Fatalf("session cookie on the session variant: status %d body %s", w.Code, w.Body.String())
 	}
 
 	open := apiTestRouter(t, "noPassword", "")
 	if w := apiPost(open, ping, nil); w.Code != http.StatusOK {
 		t.Fatalf("noPassword mode: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// The real route table, not a test router: /api/rpc must take explicit
+// credentials only, whatever middleware the route is registered with.
+func TestAPIRPCRouteAuth(t *testing.T) {
+	apiTestRouter(t, "password", "secret")
+	r := setupRouter()
+	ping := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+	cookie := func(q *http.Request) { q.AddCookie(&http.Cookie{Name: "authToken", Value: "cookie-token"}) }
+	if w := apiPost(r, ping, cookie); w.Code != http.StatusUnauthorized {
+		t.Fatalf("session cookie on the real /api/rpc route: status %d, want 401", w.Code)
+	}
+	w := apiPost(r, ping, func(q *http.Request) { q.SetBasicAuth("api", "secret") })
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"result":"pong"`) {
+		t.Fatalf("basic auth on the real /api/rpc route: status %d body %s", w.Code, w.Body.String())
 	}
 }
 
