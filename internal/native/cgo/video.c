@@ -378,7 +378,7 @@ static void populate_venc_jpeg_attr(VENC_CHN_ATTR_S *stAttr, RK_U32 width, RK_U3
     stAttr->stVencAttr.enPixelFormat = RK_FMT_YUV422_YUYV;
     stAttr->stVencAttr.u32PicWidth = width;
     stAttr->stVencAttr.u32PicHeight = height;
-    stAttr->stVencAttr.u32VirWidth = RK_ALIGN_16(width);
+    stAttr->stVencAttr.u32VirWidth = venc_vir_width(width);
     stAttr->stVencAttr.u32VirHeight = RK_ALIGN_16(height);
     stAttr->stVencAttr.u32StreamBufCnt = 2;
     stAttr->stVencAttr.u32BufSize = width * height * 3 / 2;
