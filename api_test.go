@@ -24,12 +24,18 @@ func apiTestRouter(t *testing.T, mode, password string) *gin.Engine {
 	apiAuthCache.hash = ""
 	passwordRateLimiter = NewRateLimiter()
 	r := gin.New()
-	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
+	r.POST("/api/rpc", apiAuthMiddleware(false), handleAPIRPC)
+	// Stands in for the routes that keep the cookie, like the screenshot URLs.
+	r.POST("/api/cookie-ok", apiAuthMiddleware(true), handleAPIRPC)
 	return r
 }
 
 func apiPost(r *gin.Engine, body string, auth func(*http.Request)) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/api/rpc", strings.NewReader(body))
+	return apiPostTo(r, "/api/rpc", body, auth)
+}
+
+func apiPostTo(r *gin.Engine, path, body string, auth func(*http.Request)) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	if auth != nil {
 		auth(req)
 	}
@@ -52,9 +58,14 @@ func TestAPIRPCAuth(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"result":"pong"`) {
 		t.Fatalf("basic auth: status %d body %s", w.Code, w.Body.String())
 	}
-	w = apiPost(r, ping, func(q *http.Request) { q.AddCookie(&http.Cookie{Name: "authToken", Value: "cookie-token"}) })
-	if w.Code != http.StatusOK {
-		t.Fatalf("session cookie: status %d body %s", w.Code, w.Body.String())
+	// /api/rpc reaches every method, so the session cookie alone is refused
+	// there; a route registered with allowCookie still takes it.
+	cookie := func(q *http.Request) { q.AddCookie(&http.Cookie{Name: "authToken", Value: "cookie-token"}) }
+	if w := apiPost(r, ping, cookie); w.Code != http.StatusUnauthorized {
+		t.Fatalf("session cookie on /api/rpc: status %d, want 401", w.Code)
+	}
+	if w := apiPostTo(r, "/api/cookie-ok", ping, cookie); w.Code != http.StatusOK {
+		t.Fatalf("session cookie with allowCookie: status %d body %s", w.Code, w.Body.String())
 	}
 
 	open := apiTestRouter(t, "noPassword", "")
