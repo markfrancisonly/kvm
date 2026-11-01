@@ -224,7 +224,7 @@ func setupRouter() *gin.Engine {
 	r.GET("/screenshot.png", apiAuthMiddleware(), handleScreenshotPNG)
 
 	// JSON-RPC over HTTP for scripts and automation without a WebRTC session.
-	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
+	r.POST("/api/rpc", apiAuthMiddleware(false), handleAPIRPC)
 
 	// Catch-all route for SPA
 	r.NoRoute(func(c *gin.Context) {
@@ -587,24 +587,28 @@ func basicAuthProtectedMiddleware(requireDeveloperMode bool) gin.HandlerFunc {
 	}
 }
 
-// apiAuthMiddleware gates endpoints meant for both headless/programmatic
-// access (CI, HIL test rigs) and the browser UI. In noPassword mode it lets
-// requests through with no credentials, same trusted-network assumption as
-// the cookie-protected routes. In password mode it accepts either the same
-// session cookie protectedMiddleware checks (so an already-logged-in tab can
-// just load the URL directly) or HTTP Basic Auth against the device
+// apiAuthMiddleware gates endpoints meant for headless/programmatic access
+// (CI, HIL test rigs, scripts). In noPassword mode it lets requests through
+// with no credentials, same trusted-network assumption as the cookie-protected
+// routes. In password mode it accepts HTTP Basic Auth against the device
 // password with the username ignored (so a script can just
-// `curl -u api:<password>`).
-func apiAuthMiddleware() gin.HandlerFunc {
+// `curl -u api:<password>`) and, with allowCookie, the same session cookie
+// protectedMiddleware checks, so an already-logged-in tab can load the URL
+// directly. /api/rpc refuses the cookie: it reaches every method, the UI does
+// its JSON-RPC over WebRTC and never needs it there, and a cookie on that
+// route would be a CSRF path.
+func apiAuthMiddleware(allowCookie bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if config.LocalAuthMode == "noPassword" {
 			c.Next()
 			return
 		}
 
-		if authToken, err := c.Cookie("authToken"); err == nil && authToken != "" && authToken == config.LocalAuthToken {
-			c.Next()
-			return
+		if allowCookie {
+			if authToken, err := c.Cookie("authToken"); err == nil && authToken != "" && authToken == config.LocalAuthToken {
+				c.Next()
+				return
+			}
 		}
 
 		_, password, ok := c.Request.BasicAuth()
