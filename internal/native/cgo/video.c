@@ -38,12 +38,17 @@
 
 // The capture driver lays rows out at its own stride, which is the frame
 // width rather than a 16-pixel multiple; the encoder has to read rows at
-// that stride or a width such as 1080 or 1366 shears into diagonal bands.
+// that stride or a width such as 1080 shears into diagonal bands. The
+// encoder takes a stride only when it is a multiple of 16 bytes (8 YUYV
+// pixels); for a width such as 1366 it keeps the aligned value it always
+// used, and that width shears as before instead of producing nothing.
 static uint32_t capture_stride_px = 0;
 
 static uint32_t venc_vir_width(uint32_t width)
 {
-    return capture_stride_px >= width ? capture_stride_px : RK_ALIGN_16(width);
+    if (capture_stride_px >= width && capture_stride_px % 8 == 0)
+        return capture_stride_px;
+    return RK_ALIGN_16(width);
 }
 
 int sub_dev_fd = -1;
@@ -584,6 +589,8 @@ void *run_video_stream(void *arg)
         }
         capture_stride_px = fmt.fmt.pix_mp.plane_fmt[0].bytesperline / 2;
         log_info("capture stride: %u bytes per line, %u px", fmt.fmt.pix_mp.plane_fmt[0].bytesperline, capture_stride_px);
+        if (capture_stride_px % 8 != 0)
+            log_warn("capture stride of %u px is not encoder aligned; this width will shear", capture_stride_px);
         log_info("capture colorimetry: colorspace=%u ycbcr_enc=%u quantization=%u xfer=%u",
                  fmt.fmt.pix_mp.colorspace, fmt.fmt.pix_mp.ycbcr_enc,
                  fmt.fmt.pix_mp.quantization, fmt.fmt.pix_mp.xfer_func);
