@@ -7,6 +7,9 @@ import useGuestClipboard from "@hooks/useGuestClipboard";
 import useGuestFileDrop from "@hooks/useGuestFileDrop";
 import useKeyboard from "@hooks/useKeyboard";
 import useMouse from "@hooks/useMouse";
+import usePaste from "@hooks/usePaste";
+import { isClientPasteShortcut, isInjectedPasteChord, isTypedCharacter } from "@/keyboardPaste";
+import TargetTextInput, { targetTextInputId } from "@components/TargetTextInput";
 import { useDevicePixelRatio } from "@hooks/useDevicePixelRatio";
 import {
   RpcVideoState,
@@ -62,6 +65,10 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+function reportSkipped(skipped: string[]) {
+  if (skipped.length > 0) notifications.error(m.paste_skipped_chars({ chars: skipped.join(" ") }));
+}
+
 export default function WebRTCVideo({
   hasConnectionIssues,
   hideStatusBar,
@@ -89,6 +96,7 @@ export default function WebRTCVideo({
   // Store hooks
   const settings = useSettingsStore();
   const { handleKeyPress, resetKeyboardState } = useKeyboard();
+  const { pasteText } = usePaste();
   const {
     getRelMouseMoveHandler,
     getAbsMouseMoveHandler,
@@ -114,10 +122,17 @@ export default function WebRTCVideo({
   const devicePixelRatio = useDevicePixelRatio();
 
   // OCR mode
-  const { isOcrMode, setPendingPasteText } = useUiStore();
+  const { isOcrMode, setPendingPasteText, setVideoContainer } = useUiStore();
   const { osServices, pasteViaGuest, copyFromGuest } = useGuestClipboard();
   // Files dragged from the desktop onto the video go to the remote host.
   useGuestFileDrop(videoElm);
+
+  // The device page's focus trap uses the video container, so the hidden
+  // text input inside it keeps the focus, in fullscreen too.
+  useEffect(() => {
+    setVideoContainer(fullscreenContainerRef.current);
+    return () => setVideoContainer(null);
+  }, [setVideoContainer]);
 
   // RTC related states
   const { peerConnection } = useRTCStore();
@@ -415,17 +430,65 @@ export default function WebRTCVideo({
       .catch(() => {});
   }, [audioAutoplayBlocked]);
 
+  // Characters typed without a key code are collected briefly and pasted as text.
+  const typedText = useRef({ text: "", timer: 0 });
+  const queueTypedText = useCallback(
+    (text: string) => {
+      typedText.current.text += text;
+      window.clearTimeout(typedText.current.timer);
+      typedText.current.timer = window.setTimeout(() => {
+        const pending = typedText.current.text;
+        typedText.current.text = "";
+        void pasteText(pending)
+          .then(result => reportSkipped(result.skipped))
+          .catch((error: unknown) =>
+            notifications.error(m.paste_modal_failed_paste({ error: String(error) })),
+          );
+      }, 30);
+    },
+    [pasteText],
+  );
+
+  const focusTextInput = useCallback(() => {
+    document.getElementById(targetTextInputId)?.focus({ preventScroll: true });
+  }, []);
+
+  // Take the focus once the video plays, unless an input already has it.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const active = document.activeElement;
+    if (!active || active === document.body || active === videoElm.current) focusTextInput();
+  }, [isPlaying, focusTextInput]);
+
+  // Set by the Ctrl+Shift+V chord of a device with OS Services while its paste
+  // switch is off: without an OS Services clipboard that paste opens the paste
+  // popover. Every other paste is typed at once.
+  const pasteOpensPopover = useRef(false);
+
   const keyDownHandler = useCallback(
     (e: KeyboardEvent) => {
       if (isOcrMode) return; // Let OCR overlay handle keys
       retryBlockedAudio();
-      if (osServices && isClipboardChord(e)) {
-        // Ctrl+Shift+V keeps its default action so the browser fires `paste`;
-        // Ctrl+Shift+C is handled here. Neither chord reaches the target, and
-        // a held chord transfers once: cancelling the repeat also cancels the
-        // `paste` event it would fire.
-        if (e.repeat || e.code === "KeyC") e.preventDefault();
-        if (!e.repeat && e.code === "KeyC") void copyFromGuest();
+      if (osServices && isClipboardChord(e) && e.code === "KeyC") {
+        // Ctrl+Shift+C copies from the target and never reaches it; a held
+        // chord copies once.
+        e.preventDefault();
+        if (!e.repeat) void copyFromGuest();
+        return;
+      }
+      // A paste chord keeps its default action so the browser fires `paste`
+      // (preventDefault would stop it) and the V does not reach the target;
+      // pasteHandler does the rest. Ctrl+Shift+V is one on a device with OS
+      // Services, and Ctrl+V or Ctrl+Shift+V when its switch is on. A held
+      // chord pastes once: cancelling the repeat also cancels its `paste`.
+      const pasteSwitch = isClientPasteShortcut(e, settings.pasteOnCtrlV, settings.pasteOnCtrlShiftV);
+      if (pasteSwitch || (osServices && isClipboardChord(e))) {
+        if (e.repeat) e.preventDefault();
+        else pasteOpensPopover.current = !pasteSwitch;
+        return;
+      }
+      if (isInjectedPasteChord(e)) {
+        pasteOpensPopover.current = false;
         return;
       }
       e.preventDefault();
@@ -433,6 +496,10 @@ export default function WebRTCVideo({
       const hidKey = keys[code];
 
       if (hidKey === undefined) {
+        if (isTypedCharacter(e)) {
+          queueTypedText(e.key === "Enter" ? "\n" : e.key);
+          return;
+        }
         console.warn(`Key down not mapped: ${code}`);
         return;
       }
@@ -504,14 +571,19 @@ export default function WebRTCVideo({
       retryBlockedAudio,
       osServices,
       copyFromGuest,
+      settings.pasteOnCtrlV,
+      settings.pasteOnCtrlShiftV,
+      queueTypedText,
     ],
   );
 
   const keyUpHandler = useCallback(
     async (e: KeyboardEvent) => {
       if (isOcrMode) return; // Let OCR overlay handle keys
-      // The clipboard chords never reached the target on keydown.
+      // The clipboard and paste chords never reached the target on keydown.
       if (osServices && isClipboardChord(e)) return;
+      if (isClientPasteShortcut(e, settings.pasteOnCtrlV, settings.pasteOnCtrlShiftV)) return;
+      if (isTypedCharacter(e)) return;
       e.preventDefault();
       const code = getAdjustedKeyCode(e);
       const hidKey = keys[code];
@@ -549,7 +621,14 @@ export default function WebRTCVideo({
       console.debug(`Key up: ${hidKey}`);
       handleKeyPress(hidKey, false);
     },
-    [handleKeyPress, isOcrMode, isWindowsClient, osServices],
+    [
+      handleKeyPress,
+      isOcrMode,
+      isWindowsClient,
+      osServices,
+      settings.pasteOnCtrlV,
+      settings.pasteOnCtrlShiftV,
+    ],
   );
 
   const videoKeyUpHandler = useCallback((e: KeyboardEvent) => {
@@ -643,26 +722,46 @@ export default function WebRTCVideo({
     [mediaStream, mediaStreamTrackVersion, audioEnabled],
   );
 
-  // A paste event only reaches the document when Ctrl+Shift+V was left to
-  // its default action above (plain Ctrl+V is cancelled and forwarded), or
-  // when the browser's Edit menu was used. Either way it is a deliberate
-  // request to paste this browser's clipboard into the target.
+  // Pastes this browser's clipboard into the target while the video has the
+  // focus; inputs and popovers keep theirs. A paste event reaches the document
+  // when a paste chord was left to its default action above, from the
+  // browser's Edit menu, or from a dictation tool. An OS Services clipboard
+  // takes the text whole. Without one the text is typed: at once, except
+  // after the Ctrl+Shift+V chord with its paste switch off, which opens the
+  // paste popover so the layout check shows before anything is typed.
   const pasteHandler = useCallback(
     (e: ClipboardEvent) => {
-      if (isOcrMode || isEditableTarget(e.target)) return;
+      if (isOcrMode) return;
+      const target = e.target as HTMLElement | null;
+      const isTextInputShim = target?.hasAttribute("data-text-input-shim") ?? false;
+      // Text pasted into the hidden text input is left to the browser: the
+      // field's input event forwards it, and the text stays there for a
+      // moment because a dictation tool may read it back to confirm the paste
+      // landed before it restores the clipboard.
+      if (isTextInputShim) return;
+      if (isEditableTarget(target) || target?.closest("[data-headlessui-state]")) return;
       e.preventDefault();
+      const viaPopover = pasteOpensPopover.current;
+      pasteOpensPopover.current = false;
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!text) {
         notifications.error(m.clipboard_paste_empty());
         return;
       }
-      void pasteViaGuest(text).then(result => {
-        // Without an OS Services clipboard the paste popover types the text,
-        // showing which characters the keyboard layout cannot produce.
-        if (result === "unavailable") setPendingPasteText(text);
-      });
+      void pasteViaGuest(text)
+        .then(result => {
+          if (result !== "unavailable") return;
+          if (viaPopover) {
+            setPendingPasteText(text);
+            return;
+          }
+          return pasteText(text).then(typed => reportSkipped(typed.skipped));
+        })
+        .catch((error: unknown) =>
+          notifications.error(m.paste_modal_failed_paste({ error: String(error) })),
+        );
     },
-    [isOcrMode, pasteViaGuest, setPendingPasteText],
+    [isOcrMode, pasteViaGuest, pasteText, setPendingPasteText],
   );
 
   // Setup Keyboard Events
@@ -673,7 +772,7 @@ export default function WebRTCVideo({
 
       document.addEventListener("keydown", keyDownHandler, { signal });
       document.addEventListener("keyup", keyUpHandler, { signal });
-      if (osServices) document.addEventListener("paste", pasteHandler, { signal });
+      document.addEventListener("paste", pasteHandler, { signal });
 
       window.addEventListener("blur", resetKeyboardState, { signal });
       document.addEventListener("visibilitychange", resetKeyboardState, { signal });
@@ -682,7 +781,7 @@ export default function WebRTCVideo({
         abortController.abort();
       };
     },
-    [keyDownHandler, keyUpHandler, osServices, pasteHandler, resetKeyboardState],
+    [keyDownHandler, keyUpHandler, pasteHandler, resetKeyboardState],
   );
 
   // Setup Video Event Listeners
@@ -698,6 +797,17 @@ export default function WebRTCVideo({
       videoElmRefValue.addEventListener("keydown", videoKeyDownHandler, { signal });
       videoElmRefValue.addEventListener("keyup", videoKeyUpHandler, { signal });
       videoElmRefValue.addEventListener("mousedown", retryBlockedAudio, { signal });
+
+      // A click on the video must not move the focus away from the hidden
+      // text input (the default mousedown action would), so it stays there.
+      videoElmRefValue.addEventListener(
+        "mousedown",
+        e => {
+          e.preventDefault();
+          focusTextInput();
+        },
+        { signal },
+      );
 
       // We need to know when the video is playing to update state and video size
       videoElmRefValue.addEventListener("playing", onVideoPlaying, { signal });
@@ -715,6 +825,7 @@ export default function WebRTCVideo({
       videoKeyDownHandler,
       videoKeyUpHandler,
       retryBlockedAudio,
+      focusTextInput,
       updateVideoSizeStore,
     ],
   );
@@ -907,6 +1018,7 @@ export default function WebRTCVideo({
                         })}
                       />
                       {audioEnabled && <audio ref={audioElm} autoPlay playsInline hidden />}
+                      <TargetTextInput />
                       <OcrOverlay />
                       {peerConnection?.connectionState == "connected" && !hasConnectionIssues && (
                         <div

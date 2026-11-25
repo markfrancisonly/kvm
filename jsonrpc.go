@@ -1616,6 +1616,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getKeyboardLayout":          {Func: rpcGetKeyboardLayout},
 	"setKeyboardLayout":          {Func: rpcSetKeyboardLayout, Params: []string{"layout"}},
 	"getKeyboardMacros":          {Func: getKeyboardMacros},
+	"cancelKeyboardMacro":        {Func: rpcCancelKeyboardMacro},
 	"setKeyboardMacros":          {Func: setKeyboardMacros, Params: []string{"params"}},
 	"runKeyboardMacro":           {Func: rpcRunKeyboardMacro, Params: []string{"macro"}},
 	"getLocalLoopbackOnly":       {Func: rpcGetLocalLoopbackOnly},
