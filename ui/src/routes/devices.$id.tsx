@@ -71,7 +71,6 @@ import notifications from "@/notifications";
 import { doRpcHidHandshake, useHidRpc } from "@hooks/useHidRpc";
 import useKeyboard from "@hooks/useKeyboard";
 import { registerTestHandlers, cleanupTestHooks } from "@/test/testHooks";
-import notifications from "@/notifications";
 import { microphoneStorageKey, preferMicrophoneCodec } from "@/webrtc/microphone";
 import { useSignaling } from "@/webrtc/signaling";
 
