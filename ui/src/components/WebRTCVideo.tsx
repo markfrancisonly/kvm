@@ -722,16 +722,20 @@ export default function WebRTCVideo({
     [mediaStream, mediaStreamTrackVersion, audioEnabled],
   );
 
-  // Pastes this browser's clipboard into the target while the video has the
-  // focus; inputs and popovers keep theirs. A paste event reaches the document
-  // when a paste chord was left to its default action above, from the
-  // browser's Edit menu, or from a dictation tool. An OS Services clipboard
-  // takes the text whole. Without one the text is typed: at once, except
-  // after the Ctrl+Shift+V chord with its paste switch off, which opens the
-  // paste popover so the layout check shows before anything is typed.
+  // Pastes this browser's clipboard into the target; inputs and popovers keep
+  // theirs. A paste event comes from a paste chord left to its default action
+  // above, from the browser's Edit menu, or from a dictation tool.
+  //
+  // While the video is used the hidden text input holds the focus, so the
+  // paste lands there and that field types it into the target. A paste on the
+  // document itself goes to an OS Services clipboard when the target has one.
+  // Without one it is typed at once, except after the Ctrl+Shift+V chord with
+  // its paste switch off, which opens the paste popover.
   const pasteHandler = useCallback(
     (e: ClipboardEvent) => {
       if (isOcrMode) return;
+      const viaPopover = pasteOpensPopover.current;
+      pasteOpensPopover.current = false;
       const target = e.target as HTMLElement | null;
       const isTextInputShim = target?.hasAttribute("data-text-input-shim") ?? false;
       // Text pasted into the hidden text input is left to the browser: the
@@ -741,8 +745,6 @@ export default function WebRTCVideo({
       if (isTextInputShim) return;
       if (isEditableTarget(target) || target?.closest("[data-headlessui-state]")) return;
       e.preventDefault();
-      const viaPopover = pasteOpensPopover.current;
-      pasteOpensPopover.current = false;
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!text) {
         notifications.error(m.clipboard_paste_empty());
