@@ -11,6 +11,7 @@ import {
 } from "@hooks/stores";
 import { useHidRpc } from "@hooks/useHidRpc";
 import useKeyboard from "@hooks/useKeyboard";
+import { useCancelPaste } from "@hooks/usePaste";
 import { keys, modifiers } from "@/keyboardMappings";
 import { cx } from "@/cva.config";
 import { m } from "@localizations/messages.js";
@@ -45,6 +46,7 @@ export default function InfoBar() {
 
   const { debugMode, mouseMode, showPressedKeys } = useSettingsStore();
   const { isPasteInProgress } = useHidStore();
+  const cancelPaste = useCancelPaste();
   const { keyboardLedState, usbState } = useHidStore();
   const { isTurnServerInUse, peerConnection, peerConnectionState, rpcDataChannel } = useRTCStore();
   const { hdmiState, osServices } = useVideoStore();
@@ -218,7 +220,13 @@ export default function InfoBar() {
             {isPasteInProgress && (
               <div className="flex w-[156px] items-center gap-x-1">
                 <span className="text-xs font-semibold">{m.info_paste_mode()}</span>
-                <span className="text-xs">{m.info_paste_enabled()}</span>
+                <button
+                  type="button"
+                  className="text-xs text-blue-700 underline hover:text-blue-800 dark:text-blue-500 dark:hover:text-blue-400"
+                  onClick={() => void cancelPaste()}
+                >
+                  {m.cancel()}
+                </button>
               </div>
             )}
 
