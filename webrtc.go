@@ -34,6 +34,8 @@ type Session struct {
 	VideoTrack               *webrtc.TrackLocalStaticSample
 	videoTap                 *timinglog.VideoTap
 	AudioTrack               *webrtc.TrackLocalStaticSample
+	MicrophoneTrack          *webrtc.TrackRemote
+	microphoneTrackMu        sync.Mutex
 	ControlChannel           *webrtc.DataChannel
 	RPCChannel               *webrtc.DataChannel
 	HidChannel               *webrtc.DataChannel
@@ -172,12 +174,13 @@ type hidQueueMessage struct {
 }
 
 type SessionConfig struct {
-	ICEServers []string
-	LocalIP    string
-	IsCloud    bool
-	ws         *websocket.Conn
-	Logger     *zerolog.Logger
-	MDNSMode   string
+	ICEServers        []string
+	LocalIP           string
+	IsCloud           bool
+	ws                *websocket.Conn
+	Logger            *zerolog.Logger
+	MDNSMode          string
+	MicrophoneEnabled bool
 }
 
 // negotiateAudioCodec returns the audio MIME type to use, or "" if the browser
@@ -239,6 +242,14 @@ func drainRTCP(sender *webrtc.RTPSender) {
 					osServicesKeyframeRequest()
 				}
 			}
+		}
+	}
+}
+
+func drainRemoteTrack(track *webrtc.TrackRemote) {
+	for {
+		if _, _, err := track.ReadRTP(); err != nil {
+			return
 		}
 	}
 }
@@ -625,6 +636,34 @@ func newSession(config SessionConfig) (*Session, error) {
 		go session.handleHidQueue(queue)
 	}
 
+	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		if track.Kind() != webrtc.RTPCodecTypeAudio {
+			go drainRemoteTrack(track)
+			return
+		}
+
+		if !config.MicrophoneEnabled {
+			scopedLogger.Debug().Msg("microphone disabled by device config")
+			go drainRemoteTrack(track)
+			return
+		}
+
+		if !supportedMicrophoneCodec(track.Codec().MimeType) {
+			scopedLogger.Warn().Str("codec", track.Codec().MimeType).Msg("browser microphone track has unsupported codec")
+			go drainRemoteTrack(track)
+			return
+		}
+
+		session.microphoneTrackMu.Lock()
+		defer session.microphoneTrackMu.Unlock()
+		if peerConnection.ConnectionState() == webrtc.PeerConnectionStateClosed {
+			return
+		}
+		session.MicrophoneTrack = track
+		scopedLogger.Info().Str("codec", track.Codec().MimeType).Msg("microphone track enabled")
+		startMicrophone(track)
+	})
+
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -713,9 +752,12 @@ func newSession(config SessionConfig) (*Session, error) {
 			session.close()
 			releaseVideoPause(session)
 
-			// Release audio capture if this session owned it; otherwise the
-			// goroutine would keep writing samples to a now-dead track.
+			// Release audio resources if this session owned them; otherwise the
+			// goroutines would keep using a now-dead peer connection.
 			stopAudioIfOwner(session.AudioTrack)
+			session.microphoneTrackMu.Lock()
+			stopMicrophoneIfOwner(session.MicrophoneTrack)
+			session.microphoneTrackMu.Unlock()
 
 			if session.shouldUmountVirtualMedia {
 				if err := rpcUnmountImage(); err != nil {

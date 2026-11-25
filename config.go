@@ -125,6 +125,7 @@ type Config struct {
 	MqttConfig           *MQTTConfig          `json:"mqtt_config"`
 	AudioEnabled         bool                 `json:"audio_enabled"`
 	OSServices           *OSServicesConfig    `json:"os_services"`
+	MicrophoneEnabled    bool                 `json:"microphone_enabled"`
 }
 
 // GetUpdateAPIURL returns the update API URL
