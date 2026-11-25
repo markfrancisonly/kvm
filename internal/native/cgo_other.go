@@ -121,8 +121,7 @@ func videoGetCodecType() (int, error) {
 }
 
 func videoGetSnapshot() ([]byte, error) {
-	panicPlatformNotSupported()
-	return nil, nil
+	return nil, errNotSupported
 }
 
 func videoGetEDID() (string, error) {
