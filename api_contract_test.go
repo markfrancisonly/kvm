@@ -2,9 +2,9 @@ package kvm
 
 import "testing"
 
-// The MCP server (markfrancisonly/jetkvm-mcp) drives a device through
-// POST /api/rpc and GET /screenshot.jpg. These are the methods and routes it
-// names; a rebase onto upstream must not lose one silently.
+// An MCP server drives a device through POST /api/rpc and GET /screenshot.jpg.
+// These are the methods and routes it names; a rebase onto upstream must not
+// lose one silently.
 func TestHTTPAPIKeepsWhatTheMCPServerCalls(t *testing.T) {
 	for _, method := range []string{
 		"getDeviceID", "getVideoState", "reboot",
