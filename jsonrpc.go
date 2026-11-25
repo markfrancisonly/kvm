@@ -1528,6 +1528,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"keypressReport":             {Func: rpcKeypressReport, Params: []string{"key", "press"}, Input: true},
 	"absMouseReport":             {Func: rpcAbsMouseReport, Params: []string{"x", "y", "buttons"}, Input: true},
 	"relMouseReport":             {Func: rpcRelMouseReport, Params: []string{"dx", "dy", "buttons"}, Input: true},
+	"wheelReport":                {Func: rpcWheelReport, Params: []string{"wheelY", "wheelX"}, Input: true}, // for the HTTP API; the browser sends the wheel over HID-RPC (#1462)
 	"wakeHost":                   {Func: rpcWakeHost},
 	"getVideoState":              {Func: rpcGetVideoState},
 	"getOsServicesSettings":      {Func: rpcGetOsServicesSettings},
