@@ -226,6 +226,11 @@ func setupRouter() *gin.Engine {
 	// JSON-RPC over HTTP for scripts and automation without a WebRTC session.
 	r.POST("/api/rpc", apiAuthMiddleware(), handleAPIRPC)
 
+	// Screenshot endpoints: for scripts and HIL rigs with the API credentials,
+	// and for a logged-in tab that loads the URL directly with its cookie.
+	r.GET("/screenshot.jpg", sessionOrAPIAuthMiddleware(), handleScreenshotJPEG)
+	r.GET("/screenshot.png", sessionOrAPIAuthMiddleware(), handleScreenshotPNG)
+
 	// Catch-all route for SPA
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method == "GET" && c.NegotiateFormat(gin.MIMEHTML) == gin.MIMEHTML {
@@ -690,8 +695,6 @@ func apiAuthMiddleware() gin.HandlerFunc {
 // checks, so an already-logged-in tab can load the URL directly, and leaves
 // everything else to the same credential check. For routes a browser loads,
 // like the screenshot URLs.
-//
-//nolint:unused // #1553 registers the screenshot routes with it; drop this once the two merge.
 func sessionOrAPIAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if authToken, err := c.Cookie("authToken"); err == nil && authToken != "" && authToken == config.LocalAuthToken {
